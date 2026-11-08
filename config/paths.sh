@@ -17,7 +17,7 @@ re_path_prepend() {
     esac
 }
 
-# The RE Extended Bash commands
+# The RE Extended Shell commands
 re_path_append "$RE_EXT_HOME/bin"
 
 # Android SDK tools

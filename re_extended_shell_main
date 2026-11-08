@@ -1,4 +1,4 @@
-# RE Extended Bash - entry point.
+# RE Extended Shell - entry point.
 #
 # This is the only file your shell sources (the install script adds the line to
 # ~/.bashrc and/or ~/.zshrc). It loads the rest of the setup, one file per kind
@@ -23,7 +23,7 @@ elif [ -n "${ZSH_VERSION:-}" ]; then
     # zsh-only syntax, hidden from bash's parser
     eval 'RE_EXT_HOME=${${(%):-%x}:A:h}'
 else
-    echo "RE Extended Bash: unsupported shell (bash and zsh only), not loading." >&2
+    echo "RE Extended Shell: unsupported shell (bash and zsh only), not loading." >&2
     return 0 2>/dev/null || exit 0
 fi
 export RE_EXT_HOME

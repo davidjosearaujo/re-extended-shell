@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RE Extended Bash installer: hooks re_extended_bash_main into your shell's rc file.
+# RE Extended Shell installer: hooks re_extended_shell_main into your shell's rc file.
 # Safe to run again (after moving the repo, say): it updates the hook in place.
 set -euo pipefail
 
@@ -40,7 +40,7 @@ if [ "${#SHELLS[@]}" -eq 0 ]; then
     [ "${#SHELLS[@]}" -gt 0 ] || SHELLS=(bash)
 fi
 
-echo "Installing RE Extended Bash from $REPO:"
+echo "Installing RE Extended Shell from $REPO:"
 for SH in "${SHELLS[@]}"; do
     [ "$SH" = bash ] && ensure_bash_profile
     while IFS= read -r RC; do

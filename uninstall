@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RE Extended Bash uninstaller: removes the shell hook and, with --purge, the
+# RE Extended Shell uninstaller: removes the shell hook and, with --purge, the
 # files the commands created outside this repo. Never deletes the repo itself.
 set -euo pipefail
 
@@ -11,7 +11,7 @@ SNAPSHOT="${RE_ZAP_SNAPSHOT:-zap-ready}"
 usage() {
     cat <<EOF
 Usage: ./uninstall [--bash] [--zsh] [--purge]
-  Removes the RE Extended Bash hook from ~/.bashrc and/or ~/.zshrc (every rc
+  Removes the RE Extended Shell hook from ~/.bashrc and/or ~/.zshrc (every rc
   file that has it, unless a shell flag narrows it down).
   --bash   Only ~/.bashrc (and ~/.bash_profile, ~/.bash_login)
   --zsh    Only \${ZDOTDIR:-\$HOME}/.zshrc
@@ -39,7 +39,7 @@ done
 # shellcheck source=lib/rc.sh
 . "$REPO/lib/rc.sh"
 
-echo "Uninstalling RE Extended Bash:"
+echo "Uninstalling RE Extended Shell:"
 for SH in "${SHELLS[@]}"; do
     while IFS= read -r RC; do
         update_rc uninstall "$RC"
@@ -91,5 +91,5 @@ fi
 
 echo
 echo "Your settings (local/) and certificates (certs/) are still in $REPO."
-echo "Delete that directory to remove RE Extended Bash completely."
+echo "Delete that directory to remove RE Extended Shell completely."
 echo "Done. Open a new shell to drop the setup."

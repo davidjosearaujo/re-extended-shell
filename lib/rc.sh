@@ -1,9 +1,10 @@
 # shellcheck shell=bash
-# RE Extended Bash - rc file hook handling, shared by ./install and ./uninstall.
+# RE Extended Shell - rc file hook handling, shared by ./install and ./uninstall.
 # Expects REPO to be set to the repo root before it's sourced.
 
-RE_MARKER="# Installed by RE Extended Bash"
-MAIN="$REPO/re_extended_bash_main"
+RE_MARKER="# Installed by RE Extended Shell"
+RE_OLD_MARKER="# Installed by RE Extended Bash"   # before the rename, still replaced/removed
+MAIN="$REPO/re_extended_shell_main"
 
 # The file a bash login shell reads: the first of these that exists
 bash_login_file() {
@@ -45,7 +46,7 @@ ensure_bash_profile() {
     [ "$(uname -s)" = Darwin ] || return 0
     bash_login_file >/dev/null && return 0
     cat >"$HOME/.bash_profile" <<'EOF2'
-# Created by RE Extended Bash: macOS terminals start bash as a login shell,
+# Created by RE Extended Shell: macOS terminals start bash as a login shell,
 # which reads this file and not ~/.bashrc.
 [ -f ~/.profile ] && . ~/.profile
 [ -f ~/.bashrc ] && . ~/.bashrc
@@ -59,15 +60,17 @@ quote() {
     printf "'%s'" "${1//\'/$q}"
 }
 RE_LINE="[ -f $(quote "$MAIN") ] && . $(quote "$MAIN")"
-export RE_MARKER RE_LINE
+export RE_MARKER RE_OLD_MARKER RE_LINE
 
 # Rewrites an rc file to stdout: replaces (or, with RE_MODE=uninstall, drops) an
-# existing hook and any line sourcing the old single-file 'bash_custom', keeping
-# its position in the file. A fresh install is appended at the end.
+# existing hook (including one from before the rename to RE Extended Shell) and
+# any line sourcing the old single-file 'bash_custom', keeping its position in
+# the file. A fresh install is appended at the end.
 rewrite_rc() {
     awk '
         BEGIN {
-            marker = ENVIRON["RE_MARKER"]; line = ENVIRON["RE_LINE"]
+            marker = ENVIRON["RE_MARKER"]; old_marker = ENVIRON["RE_OLD_MARKER"]
+            line = ENVIRON["RE_LINE"]
             install = (ENVIRON["RE_MODE"] != "uninstall")
             legacy = "^[ \t]*(source|\\.)[ \t]+[\"'\'']?[^\"'\'']*/bash_custom[\"'\'']?[ \t]*$"
         }
@@ -77,9 +80,9 @@ rewrite_rc() {
         }
         after_marker {
             after_marker = 0
-            if ($0 ~ /re_extended_bash_main/) next
+            if ($0 ~ /re_extended_(shell|bash)_main/) next
         }
-        $0 == marker { hook(); after_marker = 1; next }
+        $0 == marker || $0 == old_marker { hook(); after_marker = 1; next }
         $0 ~ legacy  { hook(); next }
         { print }
         END { if (install && !done) { if (NR) print ""; print marker; print line } }

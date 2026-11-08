@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# RE Extended Bash - helpers shared by the commands in bin/.
+# RE Extended Shell - helpers shared by the commands in bin/.
 # Sourced by those scripts (always bash), never by your interactive shell.
 # Must stay valid in bash 3.2 (macOS's /bin/bash) and work with both GNU
 # (Linux) and BSD (macOS) userland tools.

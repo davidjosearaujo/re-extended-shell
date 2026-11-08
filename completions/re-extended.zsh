@@ -1,4 +1,4 @@
-# Zsh tab completion for the RE Extended Bash commands.
+# Zsh tab completion for the RE Extended Shell commands.
 
 # compdef only exists once the completion system is initialised. Most setups
 # (oh-my-zsh, prezto, ...) do that before this file is sourced; if not, do it.

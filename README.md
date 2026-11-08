@@ -1,4 +1,4 @@
-# RE Extended Bash
+# RE Extended Shell
 
 Shell tooling for Android reverse engineering and mobile app pentesting, for bash and zsh.
 
@@ -57,13 +57,13 @@ reverts everything. The technique comes from
 ## Install
 
 ```sh
-git clone <this repo> ~/re-extended-bash
-cd ~/re-extended-bash
+git clone <this repo> ~/re-extended-shell
+cd ~/re-extended-shell
 ./install            # or: ./install --bash / ./install --zsh
 ```
 
 The installer adds one line to `~/.bashrc` and/or `~/.zshrc`, under an
-`# Installed by RE Extended Bash` comment, that sources `re_extended_bash_main`.
+`# Installed by RE Extended Shell` comment, that sources `re_extended_shell_main`.
 On macOS, if `~/.bash_profile` doesn't load `~/.bashrc`, the line goes there too; if
 there's no `~/.bash_profile` at all, it creates the usual one that loads `~/.profile` and `~/.bashrc`.
 Running it again is safe: it updates that line in place, for example after you move
@@ -79,7 +79,7 @@ Then export ZAP's root CA certificate to `certs/zap_root_ca.cer`, either from
 ## Layout and customisation
 
 ```
-re_extended_bash_main   the one file your rc sources; loads the rest
+re_extended_shell_main   the one file your rc sources; loads the rest
 config/                 shipped defaults, one file per kind:
   env.sh                  environment (finds ANDROID_HOME and the newest NDK)
   paths.sh                PATH (adds bin/ and the SDK tools, never duplicates)

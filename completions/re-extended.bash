@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Bash tab completion for the RE Extended Bash commands.
+# Bash tab completion for the RE Extended Shell commands.
 
 # AVD names, read from the .ini files (much faster than 'emulator -list-avds')
 _re_avds() {
