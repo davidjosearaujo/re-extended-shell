@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# RE Extended Bash installer: hooks re_extended_bash_main into your shell's rc file.
+# Safe to run again (after moving the repo, say): it updates the hook in place.
+set -euo pipefail
+
+MARKER="# Installed by RE Extended Bash"
+REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+MAIN="$REPO/re_extended_bash_main"
+
+usage() {
+    cat <<EOF
+Usage: ./install [--bash] [--zsh] [--uninstall]
+  Adds one line to ~/.bashrc and/or ~/.zshrc that sources:
+    $MAIN
+  With no shell flag it hooks every shell that has an rc file, plus your login
+  shell (\$SHELL), creating its rc file if needed.
+  --bash       Only ~/.bashrc
+  --zsh        Only \${ZDOTDIR:-\$HOME}/.zshrc
+  --uninstall  Remove the hook instead
+EOF
+}
+
+UNINSTALL="" SHELLS=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --bash) SHELLS+=(bash); shift ;;
+        --zsh)  SHELLS+=(zsh); shift ;;
+        --uninstall) UNINSTALL=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Error: Unknown option: $1" >&2; usage >&2; exit 1 ;;
+    esac
+done
+
+rc_for() {
+    case "$1" in
+        bash) echo "$HOME/.bashrc" ;;
+        zsh)  echo "${ZDOTDIR:-$HOME}/.zshrc" ;;
+    esac
+}
+
+if [ "${#SHELLS[@]}" -eq 0 ]; then
+    LOGIN_SHELL=$(basename -- "${SHELL:-}")
+    for SH in bash zsh; do
+        if [ -f "$(rc_for "$SH")" ] || { [ -z "$UNINSTALL" ] && [ "$LOGIN_SHELL" = "$SH" ]; }; then
+            SHELLS+=("$SH")
+        fi
+    done
+    [ "${#SHELLS[@]}" -gt 0 ] || SHELLS=(bash)
+fi
+
+# Single-quote a path for the rc file (valid in bash and zsh)
+quote() {
+    local q="'\\''"
+    printf "'%s'" "${1//\'/$q}"
+}
+RE_MARKER="$MARKER"
+RE_LINE="[ -f $(quote "$MAIN") ] && . $(quote "$MAIN")"
+RE_MODE="${UNINSTALL:+uninstall}"
+export RE_MARKER RE_LINE RE_MODE
+
+# Rewrites an rc file: replaces (or, uninstalling, drops) an existing hook and
+# any line sourcing the old single-file 'bash_custom', keeping its position in
+# the file. A fresh install is appended at the end.
+rewrite_rc() {
+    awk '
+        BEGIN {
+            marker = ENVIRON["RE_MARKER"]; line = ENVIRON["RE_LINE"]
+            install = (ENVIRON["RE_MODE"] != "uninstall")
+            legacy = "^[ \t]*(source|\\.)[ \t]+[\"'\'']?[^\"'\'']*/bash_custom[\"'\'']?[ \t]*$"
+        }
+        function hook() {
+            if (install && !done) { print marker; print line }
+            done = 1
+        }
+        after_marker {
+            after_marker = 0
+            if ($0 ~ /re_extended_bash_main/) next
+        }
+        $0 == marker { hook(); after_marker = 1; next }
+        $0 ~ legacy  { hook(); next }
+        { print }
+        END { if (install && !done) { if (NR) print ""; print marker; print line } }
+    ' "$1"
+}
+
+update_rc() {
+    local RC="$1" TMP
+    if [ ! -f "$RC" ]; then
+        [ -n "$UNINSTALL" ] && return 0
+        touch "$RC"
+    fi
+    TMP=$(mktemp)
+    rewrite_rc "$RC" >"$TMP"
+    if cmp -s "$RC" "$TMP"; then
+        rm -f "$TMP"
+        echo "  $RC: already up to date"
+        return 0
+    fi
+    cp -p "$RC" "$RC.re-ext.bak"
+    cat "$TMP" >"$RC"   # write in place: keeps symlinks (dotfile managers) and permissions
+    rm -f "$TMP"
+    if [ -n "$UNINSTALL" ]; then
+        echo "  $RC: hook removed (backup: $RC.re-ext.bak)"
+    else
+        echo "  $RC: hooked (backup: $RC.re-ext.bak)"
+    fi
+}
+
+if [ -n "$UNINSTALL" ]; then
+    echo "Uninstalling RE Extended Bash:"
+else
+    echo "Installing RE Extended Bash from $REPO:"
+fi
+for SH in "${SHELLS[@]}"; do
+    update_rc "$(rc_for "$SH")"
+done
+# The old installer also wrote to ~/.profile; clean that up without adding anything
+if [ -f "$HOME/.profile" ] && grep -qE '^[[:space:]]*(source|\.)[[:space:]]+.*/bash_custom' "$HOME/.profile"; then
+    RE_MODE=uninstall update_rc "$HOME/.profile"
+fi
+
+if [ -n "$UNINSTALL" ]; then
+    echo "Done. Open a new shell to drop the setup."
+    exit 0
+fi
+
+# Personal overrides, never committed
+if [ ! -d "$REPO/local" ]; then
+    mkdir -p "$REPO/local"
+    cp "$REPO"/local.example/*.sh "$REPO/local/"
+    echo "Created local/ for your own settings (from local.example/)."
+fi
+
+mkdir -p "$REPO/certs"
+if [ ! -f "$REPO/certs/zap_root_ca.cer" ]; then
+    echo
+    echo "Next: export ZAP's root CA so launch-emulator can inject it:"
+    echo "  ZAP > Tools > Options > Network > Server Certificates > Save"
+    echo "  (or: zap.sh -cmd -certpubdump $REPO/certs/zap_root_ca.cer)"
+    echo "  and save it as $REPO/certs/zap_root_ca.cer"
+fi
+
+# shellcheck disable=SC2016  # expanded by the child bash
+if ! /usr/bin/env bash -c '[ "${BASH_VERSINFO[0]}" -ge 4 ]'; then
+    echo
+    echo "Warning: the commands need bash 4 or newer, and 'bash' on your PATH is older"
+    echo "(macOS ships 3.2). Install a newer one, e.g.: brew install bash"
+fi
+
+echo
+echo "Done. Open a new shell, or run: source $(rc_for "${SHELLS[0]}")"

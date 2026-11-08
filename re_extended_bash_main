@@ -1,0 +1,41 @@
+# RE Extended Bash - entry point.
+#
+# This is the only file your shell sources (the install script adds the line to
+# ~/.bashrc and/or ~/.zshrc). It loads the rest of the setup, one file per kind
+# of thing, in this order:
+#
+#   env          environment variables
+#   paths        PATH entries
+#   functions    shell functions that must run inside your shell (cd, export, ...)
+#   aliases      aliases
+#   completions  tab completion for the commands in bin/ (interactive shells only)
+#
+# For each one, config/<name>.sh (shipped with the repo) is loaded first, then
+# local/<name>.sh (yours, git-ignored) so your settings win. The commands
+# themselves live in bin/ as standalone bash scripts, which paths.sh puts on
+# your PATH, so they behave the same in bash and zsh.
+#
+# Everything here must be valid in both bash and zsh.
+
+if [ -n "${BASH_VERSION:-}" ]; then
+    RE_EXT_HOME=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+elif [ -n "${ZSH_VERSION:-}" ]; then
+    # zsh-only syntax, hidden from bash's parser
+    eval 'RE_EXT_HOME=${${(%):-%x}:A:h}'
+else
+    echo "RE Extended Bash: unsupported shell (bash and zsh only), not loading." >&2
+    return 0 2>/dev/null || exit 0
+fi
+export RE_EXT_HOME
+
+for _re_module in env paths functions aliases completions; do
+    if [ "$_re_module" = completions ]; then
+        case "$-" in *i*) ;; *) continue ;; esac
+    fi
+    for _re_file in "$RE_EXT_HOME/config/$_re_module.sh" "$RE_EXT_HOME/local/$_re_module.sh"; do
+        if [ -r "$_re_file" ]; then
+            . "$_re_file"
+        fi
+    done
+done
+unset _re_module _re_file

@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Undo 'launch-emulator -d' on a physical device.
+# shellcheck source=../lib/common.sh
+. "$(dirname -- "$(readlink -f -- "$0")")/../lib/common.sh"
+
+REBOOT="" SERIAL=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --reboot) REBOOT=1; shift ;;
+        -h|--help)
+            echo "Usage: release-device [--reboot] [SERIAL]"
+            echo "  Closes scrcpy, clears the global HTTP proxy, removes the adb reverse tunnel"
+            echo "  and deletes the pushed CA files, so the device works normally once unplugged."
+            echo "  SERIAL can be omitted when only one device is connected."
+            echo "  --reboot  Also reboot the device, which drops the injected CA"
+            exit 0
+            ;;
+        -*) re_die "Unknown option: $1" ;;
+        *)  SERIAL="$1"; shift ;;
+    esac
+done
+
+re_require adb
+SERIAL=$(re_pick_device --physical "release-device" "$SERIAL") || exit 1
+ADB=(adb -s "$SERIAL")
+echo "Releasing device: $SERIAL"
+
+# Close the scrcpy window(s) mirroring this device
+FOUND=""
+for PID in $(pgrep -x scrcpy); do
+    if tr '\0' '\n' <"/proc/$PID/cmdline" 2>/dev/null | grep -qxF -- "$SERIAL"; then
+        kill "$PID" && FOUND=1
+    fi
+done
+[ -n "$FOUND" ] && echo "Closed scrcpy."
+
+echo "Clearing global HTTP proxy..."
+"${ADB[@]}" shell settings put global http_proxy :0
+
+echo "Removing adb reverse tunnel for port $RE_ZAP_PORT..."
+"${ADB[@]}" reverse --remove "tcp:$RE_ZAP_PORT" >/dev/null 2>&1
+
+echo "Removing pushed CA files..."
+"${ADB[@]}" shell rm -rf "$RE_DEVICE_DIR"
+
+if [ -n "$REBOOT" ]; then
+    echo "Rebooting to drop the injected CA..."
+    "${ADB[@]}" reboot
+    echo "Device $SERIAL released and rebooting."
+else
+    echo "Device $SERIAL released. The injected CA stays trusted until the next reboot (use --reboot to drop it now)."
+fi

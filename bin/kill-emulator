@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Shut down a running emulator by AVD name.
+# shellcheck source=../lib/common.sh
+. "$(dirname -- "$(readlink -f -- "$0")")/../lib/common.sh"
+
+usage() {
+    echo "Usage: kill-emulator [-f|--force] <AVD_NAME>"
+    echo "  Asks the emulator to shut down cleanly (adb emu kill). If it can't be reached"
+    echo "  over adb, or doesn't exit within 15s, its process is terminated instead."
+    echo "  -f, --force  Skip the clean shutdown and kill the process right away (SIGKILL)"
+}
+
+# Prints "SERIAL AVD_NAME" for every running emulator adb knows about
+running_emulators() {
+    local S NAME
+    for S in $(adb devices 2>/dev/null | awk 'NR > 1 && $1 ~ /^emulator-/ { print $1 }'); do
+        NAME=$(adb -s "$S" emu avd name 2>/dev/null | head -n 1 | tr -d '\r')
+        echo "$S ${NAME:-?}"
+    done
+}
+
+# PIDs of the emulator process for exactly this AVD (not just a name prefix)
+emulator_pids() {
+    local RE
+    RE=$(printf '%s' "$1" | sed 's/[][\.*^$+?(){}|/]/\\&/g')
+    pgrep -f -- "qemu-system[^ ]* .*(-avd |@)$RE( |\$)"
+}
+
+FORCE="" AVD_NAME=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -f|--force) FORCE=1; shift ;;
+        -h|--help)  usage; exit 0 ;;
+        -*) re_die "Unknown option: $1" ;;
+        *)  AVD_NAME="$1"; shift ;;
+    esac
+done
+
+if [ -z "$AVD_NAME" ]; then
+    echo "Error: Please specify the AVD name to kill."
+    usage
+    RUNNING=$(running_emulators)
+    [ -n "$RUNNING" ] && { echo "Running emulators:"; sed 's/^/  /' <<<"$RUNNING"; }
+    exit 1
+fi
+
+re_require adb
+
+PIDS=$(emulator_pids "$AVD_NAME")
+SERIAL=$(running_emulators | awk -v n="$AVD_NAME" '$2 == n { print $1; exit }')
+
+if [ -z "$PIDS" ] && [ -z "$SERIAL" ]; then
+    echo "No running emulator found with the name: $AVD_NAME"
+    exit 1
+fi
+
+if [ -n "$FORCE" ]; then
+    [ -n "$PIDS" ] || re_die "found $AVD_NAME on $SERIAL over adb but not its process, try without --force."
+    echo "Force killing emulator: $AVD_NAME (PID: ${PIDS//$'\n'/ })"
+    # shellcheck disable=SC2086
+    kill -9 $PIDS
+    exit 0
+fi
+
+if [ -n "$SERIAL" ]; then
+    echo "Shutting down emulator: $AVD_NAME ($SERIAL)"
+    adb -s "$SERIAL" emu kill >/dev/null 2>&1
+else
+    echo "Emulator $AVD_NAME is not reachable over adb, terminating it (PID: ${PIDS//$'\n'/ })"
+    # shellcheck disable=SC2086
+    kill $PIDS
+fi
+
+for _ in $(seq 1 15); do
+    [ -z "$(emulator_pids "$AVD_NAME")" ] && { echo "Emulator $AVD_NAME stopped."; exit 0; }
+    sleep 1
+done
+
+PIDS=$(emulator_pids "$AVD_NAME")
+echo "Emulator didn't exit within 15s, killing it (PID: ${PIDS//$'\n'/ })"
+# shellcheck disable=SC2086
+kill -9 $PIDS

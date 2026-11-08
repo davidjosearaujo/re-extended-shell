@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# Launch an Android emulator (or set up a connected physical device) with the
+# ZAP root CA injected as a system CA and all traffic proxied through ZAP.
+# shellcheck source=../lib/common.sh
+. "$(dirname -- "$(readlink -f -- "$0")")/../lib/common.sh"
+
+usage() {
+    cat <<EOF
+Usage: launch-emulator [--clean|--wiped] <AVD_NAME>
+       launch-emulator -d|--device [SERIAL]
+  Boots from the '$RE_ZAP_SNAPSHOT' snapshot if it exists, otherwise does a
+  wiped boot, sets up ZAP and saves the snapshot.
+  --clean, --wiped  Wiped boot, ignoring (and not touching) the snapshot
+  -d, --device      Use a connected physical device instead of an emulator.
+                    It must be rooted (userdebug build, or su via Magisk/KernelSU).
+                    Injects the CA, proxies through 'adb reverse' and opens scrcpy.
+                    SERIAL can be omitted when only one device is connected.
+  ZAP must listen on 127.0.0.1:$RE_ZAP_PORT (RE_ZAP_PORT), with its root CA
+  exported to $RE_ZAP_CERT (RE_ZAP_CERT).
+EOF
+}
+
+CLEAN="" DEVICE="" SERIAL="" AVD_NAME=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --clean|--wiped) CLEAN=1; shift ;;
+        -d|--device)
+            DEVICE=1; shift
+            # Optional serial right after the flag
+            if [ "$#" -gt 0 ] && [ "${1#-}" = "$1" ]; then SERIAL="$1"; shift; fi
+            ;;
+        -h|--help) usage; exit 0 ;;
+        -*) re_die "Unknown option: $1" ;;
+        *)  AVD_NAME="$1"; shift ;;
+    esac
+done
+
+if [ -n "$DEVICE" ] && [ -n "$AVD_NAME" ]; then
+    re_die "pass either an AVD name or -d|--device [SERIAL], not both."
+fi
+
+re_require adb
+
+# Fail early on a missing certificate, before booting anything
+WORK_DIR=$(mktemp -d)
+trap 'rm -rf "$WORK_DIR"' EXIT
+re_prepare_cert "$WORK_DIR"
+
+ADB=()
+if [ -n "$DEVICE" ]; then
+    [ -n "$CLEAN" ] && echo "Warning: --clean has no effect on a physical device, ignoring it."
+    SERIAL=$(re_pick_device --physical "launch-emulator -d" "$SERIAL") || exit 1
+    MODE="device"
+    ADB=(adb -s "$SERIAL")
+    MODEL=$("${ADB[@]}" shell getprop ro.product.model 2>/dev/null | tr -d '\r')
+    echo "Using physical device: ${MODEL:-unknown model} ($SERIAL), skipping emulator launch."
+else
+    re_require emulator
+    if [ -z "$AVD_NAME" ]; then
+        echo "Error: Please specify an AVD name, or -d|--device for a physical device."
+        usage
+        echo "Available AVDs:"
+        emulator -list-avds
+        PHYS=$(re_adb_devices --physical)
+        if [ -n "$PHYS" ]; then
+            echo "Connected physical devices:"
+            sed 's/^/  /' <<<"$PHYS"
+        fi
+        exit 1
+    fi
+
+    # Resolve the AVD directory (honours a custom path= in the .ini)
+    AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
+    [ -f "$AVD_HOME/$AVD_NAME.ini" ] || re_die "no AVD named '$AVD_NAME' (see 'emulator -list-avds')."
+    AVD_DIR=$(sed -n 's/^path=//p' "$AVD_HOME/$AVD_NAME.ini" 2>/dev/null)
+    [ -n "$AVD_DIR" ] || AVD_DIR="$AVD_HOME/$AVD_NAME.avd"
+
+    # Decide the boot mode
+    if [ -n "$CLEAN" ]; then
+        MODE="clean"
+        BOOT_ARGS=(-no-snapshot -wipe-data)
+    elif [ -d "$AVD_DIR/snapshots/$RE_ZAP_SNAPSHOT" ]; then
+        MODE="snapshot"
+        BOOT_ARGS=(-snapshot "$RE_ZAP_SNAPSHOT" -no-snapshot-save)
+    else
+        MODE="create"
+        BOOT_ARGS=(-no-snapshot-load -no-snapshot-save -wipe-data)
+    fi
+
+    # Pick a free console/adb port pair so adb can target this emulator explicitly
+    PORT=""
+    for P in $(seq 5554 2 5584); do
+        if [ -z "$(ss -Hltn "sport = :$P or sport = :$((P + 1))")" ]; then PORT="$P"; break; fi
+    done
+    [ -n "$PORT" ] || re_die "no free emulator port pair between 5554 and 5585."
+    SERIAL="emulator-$PORT"
+    ADB=(adb -s "$SERIAL")
+    EMU_LOG="${TMPDIR:-/tmp}/emulator-$AVD_NAME.log"
+
+    case "$MODE" in
+        clean)    echo "Starting forensic Android AVD: $AVD_NAME (wiped boot, snapshot ignored)" ;;
+        snapshot) echo "Starting forensic Android AVD: $AVD_NAME (from snapshot '$RE_ZAP_SNAPSHOT')" ;;
+        create)   echo "Starting forensic Android AVD: $AVD_NAME (no '$RE_ZAP_SNAPSHOT' snapshot, wiped boot, will create it)" ;;
+    esac
+    echo "Serial: $SERIAL, log: $EMU_LOG"
+
+    emulator -avd "$AVD_NAME" \
+             -port "$PORT" \
+             "${BOOT_ARGS[@]}" \
+             -netdelay none \
+             -netspeed full </dev/null >"$EMU_LOG" 2>&1 &
+    EMU_PID=$!
+    disown
+
+    echo "Waiting for Android boot to complete..."
+    until [ "$("${ADB[@]}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
+        kill -0 "$EMU_PID" 2>/dev/null || re_die "emulator exited during boot. See $EMU_LOG"
+        sleep 2
+    done
+fi
+
+# Root: 'adb root' works on emulators and userdebug builds; rooted retail
+# phones (Magisk/KernelSU) only offer su, so fall back to it on devices.
+IS_ROOT="" USE_SU=""
+if [ "$("${ADB[@]}" shell id -u 2>/dev/null | tr -d '\r')" = "0" ]; then
+    IS_ROOT=1
+else
+    echo "Restarting adb daemon with root privileges..."
+    if ! "${ADB[@]}" root 2>&1 | grep -q "cannot run as root"; then
+        for _ in $(seq 1 15); do
+            if [ "$("${ADB[@]}" shell id -u 2>/dev/null | tr -d '\r')" = "0" ]; then
+                IS_ROOT=1
+                break
+            fi
+            sleep 1
+        done
+    fi
+fi
+if [ -z "$IS_ROOT" ] && [ "$MODE" = "device" ]; then
+    echo "adbd can't run as root on this build, trying su (approve the root prompt on the device if one appears)..."
+    "${ADB[@]}" wait-for-device
+    if [ "$("${ADB[@]}" shell "su -c 'id -u'" 2>/dev/null | tr -d '\r')" = "0" ]; then
+        IS_ROOT=1
+        USE_SU=1
+    fi
+fi
+if [ -z "$IS_ROOT" ]; then
+    if [ "$MODE" = "device" ]; then
+        re_die "no root on $SERIAL (needs a userdebug build or a working su, e.g. Magisk/KernelSU)."
+    else
+        re_die "could not get a root adb shell (Google Play images don't allow it, use a Google APIs image)."
+    fi
+fi
+
+# Runs in every mode: inject_ca.sh skips the injection if it's already in place
+# (restored snapshot, or a device that hasn't rebooted since the last run)
+echo "Pushing certificate ($RE_CERT_HASH.0) and CA injection script..."
+"${ADB[@]}" shell mkdir -p "$RE_DEVICE_DIR" || exit 1
+"${ADB[@]}" push "$RE_CERT_FILE" "$RE_EXT_HOME/device/inject_ca.sh" "$RE_DEVICE_DIR/" >/dev/null || exit 1
+"${ADB[@]}" shell chmod 755 "$RE_DEVICE_DIR/inject_ca.sh"
+
+echo "Executing CA injection script..."
+INJECT_CMD="$RE_DEVICE_DIR/inject_ca.sh $RE_DEVICE_DIR/$RE_CERT_HASH.0"
+[ -n "$USE_SU" ] && INJECT_CMD="su -c '$INJECT_CMD'"
+"${ADB[@]}" shell "$INJECT_CMD" || re_die "CA injection failed."
+
+if [ "$MODE" = "device" ]; then
+    # 10.0.2.2 only exists inside the emulator; tunnel the device's localhost
+    # port back to ZAP on this machine over adb instead
+    echo "Forwarding device port $RE_ZAP_PORT to this machine's ZAP (adb reverse)..."
+    "${ADB[@]}" reverse "tcp:$RE_ZAP_PORT" "tcp:$RE_ZAP_PORT" >/dev/null || exit 1
+    PROXY="127.0.0.1:$RE_ZAP_PORT"
+else
+    PROXY="10.0.2.2:$RE_ZAP_PORT"
+fi
+echo "Setting global HTTP proxy to $PROXY..."
+"${ADB[@]}" shell settings put global http_proxy "$PROXY"
+
+if [ "$MODE" = "create" ]; then
+    echo "Saving snapshot '$RE_ZAP_SNAPSHOT'..."
+    if "${ADB[@]}" emu avd snapshot save "$RE_ZAP_SNAPSHOT" 2>&1 | grep -q "OK"; then
+        echo "Snapshot '$RE_ZAP_SNAPSHOT' saved. Next launches will boot from it."
+    else
+        echo "Warning: failed to save snapshot '$RE_ZAP_SNAPSHOT'."
+    fi
+fi
+
+if [ "$MODE" = "device" ]; then
+    if command -v scrcpy >/dev/null 2>&1; then
+        SCRCPY_LOG="${TMPDIR:-/tmp}/scrcpy-${SERIAL//[^A-Za-z0-9._-]/_}.log"
+        echo "Launching scrcpy (log: $SCRCPY_LOG)..."
+        scrcpy -s "$SERIAL" --window-title "${MODEL:-$SERIAL} ($SERIAL)" </dev/null >"$SCRCPY_LOG" 2>&1 &
+        disown
+    else
+        echo "Warning: scrcpy not found, skipping screen mirroring (https://github.com/Genymobile/scrcpy)."
+    fi
+    echo "Environment ready on $SERIAL! OWASP ZAP Proxy active on $PROXY (via adb reverse)."
+    echo "The CA lasts until the device reboots. The proxy setting persists and breaks the device's"
+    echo "network once adb disconnects, so run 'release-device $SERIAL' before unplugging it."
+else
+    echo "Environment ready on $SERIAL! OWASP ZAP Proxy active on $PROXY."
+fi

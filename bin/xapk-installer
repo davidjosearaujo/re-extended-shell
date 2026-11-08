@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# Install an XAPK/split-APK bundle (all splits + OBB data) on a device.
+# shellcheck source=../lib/common.sh
+. "$(dirname -- "$(readlink -f -- "$0")")/../lib/common.sh"
+
+DEVICE_SERIAL=""
+TARGET_AVD=""
+XAPK_FILE=""
+
+# Parse arguments
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        -s|--serial) 
+            DEVICE_SERIAL="$2"
+            shift 2
+            ;;
+        -n|--name)
+            TARGET_AVD="$2"
+            shift 2
+            ;;
+        -h|--help)
+            echo "Usage: xapk-installer [-s <device_serial_or_id> | -n <avd_name>] <path_to_file.xapk | path_to_file.zip>"
+            echo ""
+            echo "Examples:"
+            echo "  xapk-installer -s R3CN80ABCDE game.xapk        # Install to a physical device"
+            echo "  xapk-installer -n Pixel_6_Pro game.zip         # Install to an emulator by AVD name"
+            echo "  xapk-installer game.xapk                       # Install to the only connected device"
+            exit 0
+            ;;
+        *) 
+            if [[ "$1" == *.xapk || "$1" == *.zip ]]; then
+                XAPK_FILE="$1"
+            else
+                echo "Error: Unknown parameter or invalid file extension: $1"
+                echo "Usage: xapk-installer [-s <device_serial_or_id> | -n <avd_name>] <path_to_file.xapk | path_to_file.zip>"
+                exit 1
+            fi
+            shift
+            ;;
+    esac
+done
+
+if [ -z "$XAPK_FILE" ]; then
+    echo "Error: Please specify the path to a .xapk or .zip file."
+    echo "Usage: xapk-installer [-s <device_serial_or_id> | -n <avd_name>] <path_to_file.xapk | path_to_file.zip>"
+    exit 1
+fi
+
+if [ ! -f "$XAPK_FILE" ]; then
+    echo "Error: File not found: $XAPK_FILE"
+    exit 1
+fi
+
+# Check dependencies
+command -v unzip >/dev/null 2>&1 || { echo >&2 "Error: 'unzip' is required but not installed."; exit 1; }
+command -v adb >/dev/null 2>&1 || { echo >&2 "Error: 'adb' is required but not installed."; exit 1; }
+
+# If an AVD name was provided, resolve it to a serial number
+if [ -n "$TARGET_AVD" ]; then
+    echo "Looking for emulator with AVD name: $TARGET_AVD..."
+    
+    EMULATORS=$(adb devices | grep -E 'emulator-[0-9]+' | awk '{print $1}')
+    
+    for EMU in $EMULATORS; do
+        CURRENT_AVD=$(adb -s "$EMU" emu avd name 2>/dev/null | head -n 1 | tr -d '\r')
+        
+        if [ "$CURRENT_AVD" == "$TARGET_AVD" ]; then
+            DEVICE_SERIAL="$EMU"
+            echo "Found $TARGET_AVD running on $DEVICE_SERIAL"
+            break
+        fi
+    done
+
+    if [ -z "$DEVICE_SERIAL" ]; then
+        echo "Error: Could not find a running emulator with AVD name '$TARGET_AVD'."
+        exit 1
+    fi
+fi
+
+# Check the device is available (or that exactly one is connected)
+DEVICE_SERIAL=$(re_pick_device "xapk-installer -s" "$DEVICE_SERIAL") || exit 1
+ADB_CMD=(adb -s "$DEVICE_SERIAL")
+
+TMP_DIR=$(mktemp -d)
+trap 'echo "Cleaning up temporary files..."; rm -rf "$TMP_DIR"' EXIT
+
+echo "Extracting '$XAPK_FILE' to temporary directory..."
+unzip -q "$XAPK_FILE" -d "$TMP_DIR" || { echo "Error: Failed to extract archive."; exit 1; }
+
+APK_FILES=()
+while IFS= read -r -d $'\0'; do
+    APK_FILES+=("$REPLY")
+done < <(find "$TMP_DIR" -name "*.apk" -print0)
+
+if [ ${#APK_FILES[@]} -eq 0 ]; then
+    echo "Error: No APK files found inside the archive."
+    exit 1
+fi
+
+TARGET_INFO="to device '$DEVICE_SERIAL'"
+echo "Found ${#APK_FILES[@]} APK(s). Installing via adb install-multiple $TARGET_INFO..."
+
+if "${ADB_CMD[@]}" install-multiple "${APK_FILES[@]}"; then
+    echo "APK Installation successful!"
+else
+    echo "APK Installation failed."
+    exit 1
+fi
+
+# Handle OBB Data
+if [ -d "$TMP_DIR/Android/obb" ]; then
+    echo "OBB data found. Ensuring device directory exists..."
+    "${ADB_CMD[@]}" shell mkdir -p /sdcard/Android/obb/
+    
+    echo "Pushing OBB files to $TARGET_INFO..."
+    if "${ADB_CMD[@]}" push "$TMP_DIR/Android/obb/." /sdcard/Android/obb/; then
+        echo "OBB files pushed successfully!"
+    else
+        echo "Warning: Failed to push some or all OBB files."
+    fi
+fi
+
+echo "Done!"
