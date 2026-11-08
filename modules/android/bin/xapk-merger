@@ -80,7 +80,13 @@ elif command -v apkeditor >/dev/null 2>&1; then
 else
     command -v java >/dev/null 2>&1 || { echo >&2 "Error: 'java' is required but not installed."; exit 1; }
     command -v curl >/dev/null 2>&1 || { echo >&2 "Error: 'apkeditor' not on PATH and 'curl' missing to download it (or pass -j <jar>)."; exit 1; }
-    APKEDITOR_JAR="$HOME/.local/share/apkeditor/APKEditor.jar"
+    APKEDITOR_JAR="$RE_APKEDITOR_DL"
+    # Older versions downloaded it to ~/.local/share/apkeditor/, move it over
+    OLD_JAR="$HOME/.local/share/apkeditor/APKEditor.jar"
+    if [ ! -f "$APKEDITOR_JAR" ] && [ -f "$OLD_JAR" ]; then
+        mkdir -p "$(dirname "$APKEDITOR_JAR")"
+        mv "$OLD_JAR" "$APKEDITOR_JAR" && rmdir "$(dirname "$OLD_JAR")" 2>/dev/null
+    fi
     if [ ! -f "$APKEDITOR_JAR" ]; then
         echo "APKEditor not found. Downloading latest release..."
         JAR_URL=$(curl -fsSL https://api.github.com/repos/REAndroid/APKEditor/releases/latest \

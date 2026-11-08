@@ -2,7 +2,9 @@
 # Android module: what the commands leave outside the repo, for ./uninstall.
 # Sourced by ./uninstall, which provides re_purge and PURGE.
 
-re_purge "$HOME/.local/share/apkeditor/APKEditor.jar" "$HOME/.local/share/apkeditor/APKEditor.jar (xapk-merger)"
+# The APKEditor download now lives under RE_DATA_DIR (covered by core); this is
+# where older versions of xapk-merger put it
+re_purge "$HOME/.local/share/apkeditor/APKEditor.jar" "$HOME/.local/share/apkeditor/APKEditor.jar (xapk-merger, old location)"
 if [ -n "$PURGE" ]; then rmdir "$HOME/.local/share/apkeditor" 2>/dev/null || true; fi
 
 # The ZAP snapshot of every AVD (saved by launch-emulator)

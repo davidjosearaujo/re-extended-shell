@@ -49,8 +49,10 @@ if [ -n "${APKEDITOR_JAR:-}" ]; then
     else doc_warn "APKEDITOR_JAR points to a missing file: $APKEDITOR_JAR"; fi
 elif command -v apkeditor >/dev/null 2>&1; then
     doc_ok "apkeditor ${C_DIM}$(command -v apkeditor)${C_OFF}"
+elif [ -f "$RE_APKEDITOR_DL" ]; then
+    doc_ok "APKEditor $(doc_path "$RE_APKEDITOR_DL")"
 elif [ -f "$HOME/.local/share/apkeditor/APKEditor.jar" ]; then
-    doc_ok "APKEditor ~/.local/share/apkeditor/APKEditor.jar"
+    doc_ok "APKEditor ~/.local/share/apkeditor/APKEditor.jar (xapk-merger moves it on next use)"
 else
     doc_info "APKEditor not downloaded yet (xapk-merger fetches it on first use)"
 fi

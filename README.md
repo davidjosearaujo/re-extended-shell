@@ -181,13 +181,14 @@ Put these in `local/android.sh`:
 | `RE_ZAP_SNAPSHOT` | `zap-ready` |
 | `RE_CONTAINER_ENGINE` | `podman`, falling back to `docker` |
 | `RE_ANDROID_CONTAINER_IMAGE` | `us-docker.pkg.dev/android-emulator-268719/images/30-google-x64` |
-| `APKEDITOR_JAR` | `apkeditor` on PATH, else downloaded to `~/.local/share/apkeditor/` |
+| `APKEDITOR_JAR` | `apkeditor` on PATH, else downloaded to `~/.local/share/re-extended-shell/apkeditor/` |
 | `JADX` / `JADX_GUI` | `jadx` / `jadx-gui` (the command `apk-decompile` runs and suggests; may carry arguments, e.g. `flatpak run com.github.skylot.jadx`) |
 | `RE_FRIDA_UNPIN_SCRIPTS` | the five scripts above |
 | `RE_FRIDA_UNPIN_REF` | `main` |
 
 frida-server builds and the unpinning scripts are cached in
-`~/.local/share/re-extended-shell/frida/`.
+`~/.local/share/re-extended-shell/frida/`, the APKEditor jar in
+`~/.local/share/re-extended-shell/apkeditor/`.
 
 ### Notes
 

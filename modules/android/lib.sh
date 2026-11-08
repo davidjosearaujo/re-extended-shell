@@ -12,6 +12,8 @@ RE_ANDROID_DIR="$RE_EXT_HOME/modules/android"
 RE_ZAP_SNAPSHOT="${RE_ZAP_SNAPSHOT:-zap-ready}"
 # shellcheck disable=SC2034  # used by the scripts that source this file
 RE_DEVICE_DIR="/data/local/tmp/re-ext"   # where files get pushed on the device
+# shellcheck disable=SC2034  # used by the scripts that source this file
+RE_APKEDITOR_DL="$RE_DATA_DIR/apkeditor/APKEditor.jar"   # xapk-merger's download
 
 # Serials of connected, authorised devices. --physical skips emulators.
 re_adb_devices() {
