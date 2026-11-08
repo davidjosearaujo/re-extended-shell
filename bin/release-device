@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # Undo 'launch-emulator -d' on a physical device.
 # shellcheck source=../lib/common.sh
-. "$(dirname -- "$(readlink -f -- "$0")")/../lib/common.sh"
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib/common.sh"
 
 REBOOT="" SERIAL=""
 while [ "$#" -gt 0 ]; do
@@ -28,7 +33,7 @@ echo "Releasing device: $SERIAL"
 # Close the scrcpy window(s) mirroring this device
 FOUND=""
 for PID in $(pgrep -x scrcpy); do
-    if tr '\0' '\n' <"/proc/$PID/cmdline" 2>/dev/null | grep -qxF -- "$SERIAL"; then
+    if re_proc_has_arg "$PID" "$SERIAL"; then
         kill "$PID" && FOUND=1
     fi
 done

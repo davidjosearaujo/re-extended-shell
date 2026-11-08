@@ -2,7 +2,12 @@
 # Launch an Android emulator (or set up a connected physical device) with the
 # ZAP root CA injected as a system CA and all traffic proxied through ZAP.
 # shellcheck source=../lib/common.sh
-. "$(dirname -- "$(readlink -f -- "$0")")/../lib/common.sh"
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib/common.sh"
 
 usage() {
     cat <<EOF
@@ -90,7 +95,7 @@ else
     # Pick a free console/adb port pair so adb can target this emulator explicitly
     PORT=""
     for P in $(seq 5554 2 5584); do
-        if [ -z "$(ss -Hltn "sport = :$P or sport = :$((P + 1))")" ]; then PORT="$P"; break; fi
+        if ! re_port_listening "$P" && ! re_port_listening "$((P + 1))"; then PORT="$P"; break; fi
     done
     [ -n "$PORT" ] || re_die "no free emulator port pair between 5554 and 5585."
     SERIAL="emulator-$PORT"

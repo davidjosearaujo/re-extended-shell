@@ -1,6 +1,8 @@
 # shellcheck shell=bash
 # RE Extended Bash - helpers shared by the commands in bin/.
 # Sourced by those scripts (always bash), never by your interactive shell.
+# Must stay valid in bash 3.2 (macOS's /bin/bash) and work with both GNU
+# (Linux) and BSD (macOS) userland tools.
 
 RE_EXT_HOME=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 
@@ -23,6 +25,46 @@ re_require() {
     done
 }
 
+RE_OS=$(uname -s)   # Linux, Darwin, ...
+
+# Succeeds if something listens on TCP port $1 on this machine.
+re_port_listening() {
+    if command -v ss >/dev/null 2>&1; then
+        [ -n "$(ss -Hltn "sport = :$1")" ]
+    elif command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+    else
+        netstat -an 2>/dev/null | awk -v p="$1" '
+            toupper($NF) == "LISTEN" && $4 ~ ("[.:]" p "$") { found = 1 }
+            END { exit !found }'
+    fi
+}
+
+# Succeeds if process PID was started with an argument exactly equal to $2.
+# Linux reads /proc (exact, even with spaces in arguments); elsewhere (macOS)
+# 'ps' only gives the space-joined command line, so it matches whole words.
+re_proc_has_arg() {
+    local PID="$1" ARG="$2"
+    if [ -r "/proc/$PID/cmdline" ]; then
+        tr '\0' '\n' <"/proc/$PID/cmdline" 2>/dev/null | grep -qxF -- "$ARG"
+    else
+        ps -o args= -p "$PID" 2>/dev/null | tr ' ' '\n' | grep -qxF -- "$ARG"
+    fi
+}
+
+# Prints the path of a GUI tool: on PATH, or (macOS) inside its .app bundle.
+# Usage: re_find_gui_tool <command> <App name>   e.g. re_find_gui_tool wireshark Wireshark
+re_find_gui_tool() {
+    local APP
+    if command -v "$1" >/dev/null 2>&1; then command -v "$1"; return 0; fi
+    if [ "$RE_OS" = Darwin ]; then
+        for APP in "/Applications/$2.app" "$HOME/Applications/$2.app"; do
+            if [ -x "$APP/Contents/MacOS/$2" ]; then echo "$APP/Contents/MacOS/$2"; return 0; fi
+        done
+    fi
+    return 1
+}
+
 # Serials of connected, authorised devices. --physical skips emulators.
 re_adb_devices() {
     if [ "${1:-}" = "--physical" ]; then
@@ -41,8 +83,10 @@ re_pick_device() {
     local CALLER="$1" SERIAL="${2:-}" KIND="device"
     [ -n "$FILTER" ] && KIND="physical device"
     if [ -z "$SERIAL" ]; then
-        local DEVICES=()
-        mapfile -t DEVICES < <(re_adb_devices $FILTER)
+        local DEVICES=() LINE
+        while IFS= read -r LINE; do
+            [ -n "$LINE" ] && DEVICES+=("$LINE")
+        done < <(re_adb_devices $FILTER)
         case "${#DEVICES[@]}" in
             0)  echo "Error: no $KIND connected (check 'adb devices' and that USB debugging is authorised)." >&2
                 return 1 ;;

@@ -13,7 +13,7 @@ usage() {
 Usage: ./uninstall [--bash] [--zsh] [--purge]
   Removes the RE Extended Bash hook from ~/.bashrc and/or ~/.zshrc (every rc
   file that has it, unless a shell flag narrows it down).
-  --bash   Only ~/.bashrc
+  --bash   Only ~/.bashrc (and ~/.bash_profile, ~/.bash_login)
   --zsh    Only \${ZDOTDIR:-\$HOME}/.zshrc
   --purge  Also delete what the commands created outside the repo:
              $APKEDITOR_DIR/APKEditor.jar (downloaded by xapk-merger)
@@ -41,7 +41,9 @@ done
 
 echo "Uninstalling RE Extended Bash:"
 for SH in "${SHELLS[@]}"; do
-    update_rc uninstall "$(rc_for "$SH")"
+    while IFS= read -r RC; do
+        update_rc uninstall "$RC"
+    done < <(rc_for --all "$SH")
 done
 clean_legacy_profile
 

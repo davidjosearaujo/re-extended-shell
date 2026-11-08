@@ -21,23 +21,30 @@ _re_serials() {
     fi
 }
 
+# Valid in bash 3.2 (macOS's /bin/bash): no mapfile or ${var,,}.
+
 # COMPREPLY = words from $1 matching the current word
 _re_reply_words() {
-    mapfile -t COMPREPLY < <(compgen -W "$1" -- "$cur")
+    local w
+    COMPREPLY=()
+    while IFS= read -r w; do
+        COMPREPLY+=("$w")
+    done < <(compgen -W "$1" -- "$cur")
 }
 
-# COMPREPLY = directories + files whose extension is in $1 (e.g. "xapk|zip")
+# COMPREPLY = directories + files whose extension is in $1 (e.g. "xapk|zip"),
+# matched case-insensitively
 _re_reply_files() {
-    local f files=()
+    local f re="\\.($1)\$" nocase
+    shopt -q nocasematch && nocase=1
+    shopt -s nocasematch
     COMPREPLY=()
-    mapfile -t files < <(compgen -f -- "$cur")
-    for f in "${files[@]}"; do
-        if [ -d "$f" ]; then
-            COMPREPLY+=("$f")
-        elif [ -z "$1" ] || [[ "${f,,}" =~ \.($1)$ ]]; then
+    while IFS= read -r f; do
+        if [ -d "$f" ] || [ -z "$1" ] || [[ "$f" =~ $re ]]; then
             COMPREPLY+=("$f")
         fi
-    done
+    done < <(compgen -f -- "$cur")
+    [ -n "$nocase" ] || shopt -u nocasematch
     compopt -o filenames 2>/dev/null
 }
 

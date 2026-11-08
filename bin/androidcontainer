@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # Run Google's Android emulator container and connect adb to it.
 # shellcheck source=../lib/common.sh
-. "$(dirname -- "$(readlink -f -- "$0")")/../lib/common.sh"
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib/common.sh"
 
 IMAGE="${RE_ANDROID_CONTAINER_IMAGE:-us-docker.pkg.dev/android-emulator-268719/images/30-google-x64}"
 ENGINE="${RE_CONTAINER_ENGINE:-}"
@@ -27,6 +32,11 @@ if [ -z "$ENGINE" ]; then
     [ -n "$ENGINE" ] || re_die "neither podman nor docker is installed."
 fi
 re_require "$ENGINE" adb
+if [ "$RE_OS" != Linux ]; then
+    # The image runs QEMU with KVM, which only Linux hosts provide (Docker
+    # Desktop/podman machine on macOS run a VM without nested KVM)
+    re_die "the Android emulator container needs KVM, so it only runs on Linux hosts. On $RE_OS use launch-emulator <AVD> instead."
+fi
 [ -r /dev/kvm ] || re_die "/dev/kvm is not available (KVM is required)."
 [ -f "$HOME/.android/adbkey" ] || re_die "$HOME/.android/adbkey not found (run 'adb start-server' once to create it)."
 

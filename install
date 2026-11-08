@@ -14,7 +14,7 @@ Usage: ./install [--bash] [--zsh]
     $MAIN
   With no shell flag it hooks every shell that has an rc file, plus your login
   shell (\$SHELL), creating its rc file if needed.
-  --bash  Only ~/.bashrc
+  --bash  Only ~/.bashrc (on macOS also makes sure ~/.bash_profile loads it)
   --zsh   Only \${ZDOTDIR:-\$HOME}/.zshrc
   To remove it again: ./uninstall
 EOF
@@ -33,7 +33,7 @@ done
 if [ "${#SHELLS[@]}" -eq 0 ]; then
     LOGIN_SHELL=$(basename -- "${SHELL:-}")
     for SH in bash zsh; do
-        if [ -f "$(rc_for "$SH")" ] || [ "$LOGIN_SHELL" = "$SH" ]; then
+        if [ -f "$(rc_for "$SH" | head -n 1)" ] || [ "$LOGIN_SHELL" = "$SH" ]; then
             SHELLS+=("$SH")
         fi
     done
@@ -42,7 +42,10 @@ fi
 
 echo "Installing RE Extended Bash from $REPO:"
 for SH in "${SHELLS[@]}"; do
-    update_rc install "$(rc_for "$SH")"
+    [ "$SH" = bash ] && ensure_bash_profile
+    while IFS= read -r RC; do
+        update_rc install "$RC"
+    done < <(rc_for "$SH")
 done
 clean_legacy_profile
 
@@ -62,12 +65,5 @@ if [ ! -f "$REPO/certs/zap_root_ca.cer" ]; then
     echo "  and save it as $REPO/certs/zap_root_ca.cer"
 fi
 
-# shellcheck disable=SC2016  # expanded by the child bash
-if ! /usr/bin/env bash -c '[ "${BASH_VERSINFO[0]}" -ge 4 ]'; then
-    echo
-    echo "Warning: the commands need bash 4 or newer, and 'bash' on your PATH is older"
-    echo "(macOS ships 3.2). Install a newer one, e.g.: brew install bash"
-fi
-
 echo
-echo "Done. Open a new shell, or run: source $(rc_for "${SHELLS[0]}")"
+echo "Done. Open a new shell, or run: source $(rc_for "${SHELLS[0]}" | tail -n 1)"

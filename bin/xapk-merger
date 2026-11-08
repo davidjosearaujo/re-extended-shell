@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # Merge XAPK/APKS splits into a single signed APK.
 # shellcheck source=../lib/common.sh
-. "$(dirname -- "$(readlink -f -- "$0")")/../lib/common.sh"
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib/common.sh"
 
 INPUT_FILE=""
 OUTPUT_APK=""

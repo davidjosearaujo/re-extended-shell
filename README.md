@@ -18,7 +18,7 @@ APKs/XAPKs, live packet capture into Wireshark, and a few other everyday tasks.
 | `launch-emulator-wireshark [-s SERIAL] [-i IFACE]` | Streams `tcpdump` from the device into a local Wireshark window. |
 | `xapk-installer [-s SERIAL \| -n AVD] <file.xapk>` | Installs every split in an XAPK/ZIP bundle with `adb install-multiple` and pushes any OBB data. |
 | `xapk-merger [options] <file.xapk\|.apks>` | Merges the splits into one installable APK with [APKEditor](https://github.com/REAndroid/APKEditor), downloaded on first use. Then zipaligns it and signs it with the debug keystore or your own (`-k`). |
-| `androidcontainer` | Runs Google's Android emulator container (podman or docker) and connects adb to it as root. |
+| `androidcontainer` | Runs Google's Android emulator container (podman or docker) and connects adb to it as root. Linux only, it needs KVM. |
 
 Every command takes `-h`/`--help`, and all of them have tab completion in bash and zsh,
 including AVD names and device serials.
@@ -37,11 +37,22 @@ reverts everything. The technique comes from
 
 ## Requirements
 
-- Linux (macOS should mostly work but isn't tested), bash 4+ for the commands; bash or zsh as your shell
+- Linux or macOS. The commands run on any bash from 3.2 up, so macOS's built-in
+  `/bin/bash` is enough; your own shell can be bash or zsh
 - Android SDK platform-tools and emulator, `openssl`
 - ZAP listening on `127.0.0.1:9090` (change with `RE_ZAP_PORT`)
 - For emulators: a **Google APIs** system image. Google Play images don't allow `adb root`.
 - Optional: `scrcpy`, `wireshark`, `podman`/`docker`, Java and the SDK build-tools (for `xapk-merger`)
+
+### macOS notes
+
+- On Apple Silicon, create AVDs from **arm64-v8a** system images; x86_64 images don't boot there.
+- `androidcontainer` is Linux-only: Google's emulator container needs `/dev/kvm`, which
+  Docker Desktop and podman machine don't provide on macOS. Use `launch-emulator <AVD>` instead.
+- `launch-emulator-wireshark` finds Wireshark in `/Applications` (or `~/Applications`)
+  when `wireshark` isn't on your PATH.
+- Bash in macOS terminals runs as a login shell and reads `~/.bash_profile`, not
+  `~/.bashrc`. The installer takes care of that (see below). zsh, the default shell, needs nothing extra.
 
 ## Install
 
@@ -53,6 +64,8 @@ cd ~/re-extended-bash
 
 The installer adds one line to `~/.bashrc` and/or `~/.zshrc`, under an
 `# Installed by RE Extended Bash` comment, that sources `re_extended_bash_main`.
+On macOS, if `~/.bash_profile` doesn't load `~/.bashrc`, the line goes there too; if
+there's no `~/.bash_profile` at all, it creates the usual one that loads `~/.profile` and `~/.bashrc`.
 Running it again is safe: it updates that line in place, for example after you move
 the repo. `./uninstall` removes it; `./uninstall --purge` also deletes the
 downloaded APKEditor jar and the `zap-ready` snapshots of your AVDs. Neither touches
@@ -88,6 +101,11 @@ in `local/` (extra PATH entries, your own aliases, shell functions in
 `local/` are sourced by both bash and zsh, so keep them portable or check
 `$BASH_VERSION` / `$ZSH_VERSION`. The commands in `bin/` are separate bash scripts,
 so they behave the same whichever shell you use.
+
+If you change the code, keep it working on both systems: bash 3.2 (no `mapfile`,
+`declare -A` or `${var,,}`) and BSD tools as well as GNU ones (no `readlink -f`,
+`sed -i`, `grep -P`, `ss` or `/proc` without a fallback). `lib/common.sh` has helpers
+for the OS-specific parts, e.g. `re_port_listening` and `re_proc_has_arg`.
 
 Settings the commands read (put them in `local/env.sh`):
 
