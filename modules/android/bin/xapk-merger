@@ -17,9 +17,11 @@ KS_PASS="android"
 KS_ALIAS="androiddebugkey"
 KEEP_OBB=1
 SKIP_SIGN=0
+PROVISION=0
 
 usage() {
     echo "Usage: xapk-merger [-o <output.apk>] [-k <keystore> [-p <ks_pass>] [-a <alias>]] [-j <APKEditor.jar>] [--no-obb] <path_to_file.xapk | .zip | .apks | directory>"
+    echo "       xapk-merger --provision    Download APKEditor, or update it to the latest release"
     echo ""
     echo "Examples:"
     echo "  xapk-merger game.xapk                              # -> ./game_merged.apk (debug-signed)"
@@ -27,6 +29,40 @@ usage() {
     echo "  xapk-merger -o out/app.apk game.zip                # Custom output path"
     echo "  xapk-merger -k my.jks -p secret -a mykey game.xapk # Sign with your own keystore"
     echo "  xapk-merger -j ~/tools/APKEditor.jar game.xapk     # Force a specific APKEditor jar"
+    echo "  xapk-merger --provision                            # Fetch/update APKEditor, then exit"
+}
+
+# Older versions downloaded APKEditor to ~/.local/share/apkeditor/, move it over
+migrate_old_jar() {
+    local OLD_JAR="$HOME/.local/share/apkeditor/APKEditor.jar"
+    if [ ! -f "$RE_APKEDITOR_DL" ] && [ -f "$OLD_JAR" ]; then
+        mkdir -p "$(dirname "$RE_APKEDITOR_DL")"
+        mv "$OLD_JAR" "$RE_APKEDITOR_DL" && rmdir "$(dirname "$OLD_JAR")" 2>/dev/null
+    fi
+    return 0
+}
+
+# Downloads the latest APKEditor release to $RE_APKEDITOR_DL and records its tag
+# in $RE_APKEDITOR_DL.version. With "update", skips the download when that tag
+# is already the latest. A failed download leaves the current jar in place.
+download_apkeditor() {
+    local MODE="${1:-}" RELEASE TAG JAR_URL CURRENT=""
+    re_require curl
+    RELEASE=$(curl -fsSL https://api.github.com/repos/REAndroid/APKEditor/releases/latest) \
+        || re_die "could not reach the GitHub API to find the latest APKEditor release."
+    TAG=$(printf '%s\n' "$RELEASE" | grep -o '"tag_name": *"[^"]*"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')
+    JAR_URL=$(printf '%s\n' "$RELEASE" | grep -o '"browser_download_url": *"[^"]*\.jar"' | head -n 1 \
+        | sed 's/.*"\(https[^"]*\)"$/\1/')
+    [ -n "$JAR_URL" ] || re_die "could not resolve the APKEditor download URL. Download it manually and pass -j <jar>."
+    [ -f "$RE_APKEDITOR_DL.version" ] && CURRENT=$(cat "$RE_APKEDITOR_DL.version")
+    if [ "$MODE" = update ] && [ -f "$RE_APKEDITOR_DL" ] && [ -n "$TAG" ] && [ "$TAG" = "$CURRENT" ]; then
+        echo "APKEditor $TAG is already the latest release: $RE_APKEDITOR_DL"
+        return 0
+    fi
+    echo "Downloading APKEditor ${TAG:-(latest release)}${CURRENT:+ (replacing $CURRENT)}..."
+    re_download "$JAR_URL" "$RE_APKEDITOR_DL" --progress-bar || re_die "download failed."
+    if [ -n "$TAG" ]; then echo "$TAG" >"$RE_APKEDITOR_DL.version"; else rm -f "$RE_APKEDITOR_DL.version"; fi
+    echo "APKEditor ${TAG:+$TAG }saved to $RE_APKEDITOR_DL"
 }
 
 # Parse arguments
@@ -38,65 +74,59 @@ while [[ "$#" -gt 0 ]]; do
         -a|--alias)    KS_ALIAS="$2"; shift 2 ;;
         -j|--jar)      APKEDITOR_JAR="$2"; shift 2 ;;
         --no-obb)      KEEP_OBB=0; shift ;;
+        --provision)   PROVISION=1; shift ;;
         -h|--help)     usage; exit 0 ;;
         *)
             # Accepts .xapk, .zip, .apks and a directory of APKs
             if [[ -d "$1" || "$1" == *.xapk || "$1" == *.zip || "$1" == *.apks ]]; then
                 INPUT_FILE="$1"
             else
-                echo "Error: Unknown parameter or invalid file extension: $1"
-                usage
-                exit 1
+                usage >&2
+                re_die "Unknown parameter or invalid file extension: $1"
             fi
             shift
             ;;
     esac
 done
 
-if [ -z "$INPUT_FILE" ]; then
-    echo "Error: Please specify the path to a .xapk, .zip or .apks file, or a directory of APKs."
-    usage
-    exit 1
+# --provision: fetch or update the downloaded jar, then stop unless there's
+# something to merge too
+if [ "$PROVISION" -eq 1 ]; then
+    migrate_old_jar
+    download_apkeditor update
+    if [ -n "$APKEDITOR_JAR" ]; then
+        echo "Note: merges use $APKEDITOR_JAR (APKEDITOR_JAR or -j), not this download."
+    elif command -v apkeditor >/dev/null 2>&1; then
+        echo "Note: merges use $(command -v apkeditor) (on PATH), not this download."
+    fi
+    [ -n "$INPUT_FILE" ] || exit 0
 fi
 
-if [ ! -f "$INPUT_FILE" ] && [ ! -d "$INPUT_FILE" ]; then
-    echo "Error: File not found: $INPUT_FILE"
-    exit 1
+if [ -z "$INPUT_FILE" ]; then
+    usage >&2
+    re_die "please specify the path to a .xapk, .zip or .apks file, or a directory of APKs."
 fi
+[ -f "$INPUT_FILE" ] || [ -d "$INPUT_FILE" ] || re_die "file not found: $INPUT_FILE"
 
 # Check dependencies
-if [ ! -d "$INPUT_FILE" ]; then
-    command -v unzip >/dev/null 2>&1 || { echo >&2 "Error: 'unzip' is required but not installed."; exit 1; }
-fi
-re_find_build_tool apksigner >/dev/null || { echo >&2 "Error: 'apksigner' not found (PATH or \$ANDROID_HOME/build-tools)."; exit 1; }
+[ -d "$INPUT_FILE" ] || re_require unzip
+re_find_build_tool apksigner >/dev/null || re_die "'apksigner' not found (PATH or \$ANDROID_HOME/build-tools)."
 
 # Resolve APKEditor: -j <jar> > 'apkeditor' on PATH > download jar
 if [ -n "$APKEDITOR_JAR" ]; then
-    [ -f "$APKEDITOR_JAR" ] || { echo >&2 "Error: Jar not found: $APKEDITOR_JAR"; exit 1; }
-    command -v java >/dev/null 2>&1 || { echo >&2 "Error: 'java' is required but not installed."; exit 1; }
+    [ -f "$APKEDITOR_JAR" ] || re_die "jar not found: $APKEDITOR_JAR"
+    re_require java
     APKEDITOR_CMD=(java -jar "$APKEDITOR_JAR")
 elif command -v apkeditor >/dev/null 2>&1; then
     APKEDITOR_CMD=("$(command -v apkeditor)")
 else
-    command -v java >/dev/null 2>&1 || { echo >&2 "Error: 'java' is required but not installed."; exit 1; }
-    command -v curl >/dev/null 2>&1 || { echo >&2 "Error: 'apkeditor' not on PATH and 'curl' missing to download it (or pass -j <jar>)."; exit 1; }
-    APKEDITOR_JAR="$RE_APKEDITOR_DL"
-    # Older versions downloaded it to ~/.local/share/apkeditor/, move it over
-    OLD_JAR="$HOME/.local/share/apkeditor/APKEditor.jar"
-    if [ ! -f "$APKEDITOR_JAR" ] && [ -f "$OLD_JAR" ]; then
-        mkdir -p "$(dirname "$APKEDITOR_JAR")"
-        mv "$OLD_JAR" "$APKEDITOR_JAR" && rmdir "$(dirname "$OLD_JAR")" 2>/dev/null
+    re_require java
+    migrate_old_jar
+    if [ ! -f "$RE_APKEDITOR_DL" ]; then
+        echo "APKEditor not found."
+        download_apkeditor
     fi
-    if [ ! -f "$APKEDITOR_JAR" ]; then
-        echo "APKEditor not found. Downloading latest release..."
-        JAR_URL=$(curl -fsSL https://api.github.com/repos/REAndroid/APKEditor/releases/latest \
-            | grep -o '"browser_download_url": *"[^"]*\.jar"' | head -n 1 \
-            | sed 's/.*"\(https[^"]*\)"$/\1/')
-        [ -n "$JAR_URL" ] || { echo "Error: Could not resolve APKEditor download URL. Download it manually and pass -j <jar>."; exit 1; }
-        mkdir -p "$(dirname "$APKEDITOR_JAR")"
-        curl -fL -o "$APKEDITOR_JAR" "$JAR_URL" || { rm -f "$APKEDITOR_JAR"; echo "Error: Download failed."; exit 1; }
-    fi
-    APKEDITOR_CMD=(java -jar "$APKEDITOR_JAR")
+    APKEDITOR_CMD=(java -jar "$RE_APKEDITOR_DL")
 fi
 echo "Using APKEditor: ${APKEDITOR_CMD[*]}"
 
@@ -120,7 +150,10 @@ else
     EXTRACT_DIR="$TMP_DIR/extracted"
     mkdir -p "$EXTRACT_DIR"
     echo "Extracting '$INPUT_FILE' to temporary directory..."
-    unzip -q "$INPUT_FILE" -d "$EXTRACT_DIR" || { echo "Error: Failed to extract archive."; exit 1; }
+    # With --no-obb, don't unpack the (often multi-GB) OBB data just to ignore it
+    UNZIP_ARGS=()
+    [ "$KEEP_OBB" -eq 1 ] || UNZIP_ARGS+=(-x 'Android/obb/*')
+    unzip -q "$INPUT_FILE" -d "$EXTRACT_DIR" ${UNZIP_ARGS[@]+"${UNZIP_ARGS[@]}"} || re_die "failed to extract archive."
 fi
 
 APK_FILES=()
@@ -128,10 +161,7 @@ while IFS= read -r -d $'\0'; do
     APK_FILES+=("$REPLY")
 done < <(find "$EXTRACT_DIR" -type f -name "*.apk" -print0)
 
-if [ ${#APK_FILES[@]} -eq 0 ]; then
-    echo "Error: No APK files found in '$INPUT_FILE'."
-    exit 1
-fi
+[ ${#APK_FILES[@]} -gt 0 ] || re_die "no APK files found in '$INPUT_FILE'."
 
 if [ ${#APK_FILES[@]} -eq 1 ]; then
     echo "Only one APK found, nothing to merge. Copying it as-is (original signature kept)..."
@@ -144,19 +174,13 @@ else
         i=$((i + 1))
         NAME=$(basename "$APK")
         [ -e "$SPLITS_DIR/$NAME" ] && NAME="${i}_${NAME}"
-        cp "$APK" "$SPLITS_DIR/$NAME"
+        # Hard link when possible: splits of big games add up to GBs
+        ln "$APK" "$SPLITS_DIR/$NAME" 2>/dev/null || cp "$APK" "$SPLITS_DIR/$NAME"
     done
 
     echo "Found ${#APK_FILES[@]} APK(s). Merging with APKEditor..."
-    if ! "${APKEDITOR_CMD[@]}" m -i "$SPLITS_DIR" -o "$TMP_DIR/merged-unsigned.apk"; then
-        echo "APK merge failed."
-        exit 1
-    fi
-
-    if [ ! -f "$TMP_DIR/merged-unsigned.apk" ]; then
-        echo "Error: APKEditor finished but no merged APK was produced."
-        exit 1
-    fi
+    "${APKEDITOR_CMD[@]}" m -i "$SPLITS_DIR" -o "$TMP_DIR/merged-unsigned.apk" || re_die "APK merge failed."
+    [ -f "$TMP_DIR/merged-unsigned.apk" ] || re_die "APKEditor finished but no merged APK was produced."
 fi
 
 if [ "$SKIP_SIGN" -eq 0 ]; then

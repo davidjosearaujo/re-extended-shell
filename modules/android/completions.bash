@@ -100,7 +100,7 @@ _re_complete_xapk_merger() {
         -p|--ks-pass|-a|--alias) COMPREPLY=(); return ;;
     esac
     if [[ "$cur" == -* ]]; then
-        _re_reply_words "-o --output -k --keystore -p --ks-pass -a --alias -j --jar --no-obb -h --help"
+        _re_reply_words "-o --output -k --keystore -p --ks-pass -a --alias -j --jar --no-obb --provision -h --help"
     else
         _re_reply_files "xapk|zip|apks"
     fi

@@ -50,11 +50,13 @@ if [ -n "${APKEDITOR_JAR:-}" ]; then
 elif command -v apkeditor >/dev/null 2>&1; then
     doc_ok "apkeditor ${C_DIM}$(command -v apkeditor)${C_OFF}"
 elif [ -f "$RE_APKEDITOR_DL" ]; then
-    doc_ok "APKEditor $(doc_path "$RE_APKEDITOR_DL")"
+    APKEDITOR_VERSION=$(cat "$RE_APKEDITOR_DL.version" 2>/dev/null)
+    doc_ok "APKEditor ${APKEDITOR_VERSION:+$APKEDITOR_VERSION }${C_DIM}$(doc_path "$RE_APKEDITOR_DL")${C_OFF}"
+    doc_info "Update it to the latest release with: xapk-merger --provision"
 elif [ -f "$HOME/.local/share/apkeditor/APKEditor.jar" ]; then
     doc_ok "APKEditor ~/.local/share/apkeditor/APKEditor.jar (xapk-merger moves it on next use)"
 else
-    doc_info "APKEditor not downloaded yet (xapk-merger fetches it on first use)"
+    doc_info "APKEditor not downloaded yet (xapk-merger fetches it on first use, or now with: xapk-merger --provision)"
 fi
 if doc_tool optional apktool "apk-decompile, apk-patch" "https://apktool.org"; then
     APKTOOL_VERSION=$(apktool --version 2>/dev/null | head -n 1)

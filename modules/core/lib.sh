@@ -31,6 +31,23 @@ re_require() {
 
 RE_OS=$(uname -s)   # Linux, Darwin, ...
 
+# Downloads URL to DEST through DEST.part, so a failed or interrupted download
+# never leaves a half-written file (or damages an existing one). Creates DEST's
+# directory. Extra arguments go to curl (e.g. --progress-bar, -sS).
+# Usage: re_download URL DEST [curl option]...
+re_download() {
+    local URL="$1" DEST="$2"
+    shift 2
+    re_require curl
+    mkdir -p "$(dirname -- "$DEST")" || return 1
+    if curl -fL "$@" -o "$DEST.part" "$URL"; then
+        mv -f "$DEST.part" "$DEST"
+    else
+        rm -f "$DEST.part"
+        return 1
+    fi
+}
+
 # Succeeds if something listens on TCP port $1 on this machine.
 re_port_listening() {
     if command -v ss >/dev/null 2>&1; then

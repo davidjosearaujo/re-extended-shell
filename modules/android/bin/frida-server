@@ -106,26 +106,22 @@ esac
 NAME="frida-server-$VERSION-android-$ARCH"
 LOCAL_BIN="$FRIDA_DIR/$NAME"
 if [ ! -f "$LOCAL_BIN" ] || [ -n "$REFRESH" ]; then
-    re_require curl
-    mkdir -p "$FRIDA_DIR"
     echo "Downloading $NAME..."
-    TMP_XZ=$(mktemp "$FRIDA_DIR/.download.XXXXXX")
-    trap 'rm -f "$TMP_XZ" "$TMP_XZ.out"' EXIT
-    curl -fL --progress-bar -o "$TMP_XZ" \
-        "https://github.com/frida/frida/releases/download/$VERSION/$NAME.xz" \
+    trap 'rm -f "$LOCAL_BIN.xz" "$LOCAL_BIN.part"' EXIT
+    re_download "https://github.com/frida/frida/releases/download/$VERSION/$NAME.xz" "$LOCAL_BIN.xz" --progress-bar \
         || re_die "download failed (is there a $VERSION release for android-$ARCH?)."
     # xz isn't installed on stock macOS, but Python (which Frida needs) can do it
     if command -v xz >/dev/null 2>&1; then
-        xz -dc "$TMP_XZ" >"$TMP_XZ.out" || re_die "could not decompress $NAME.xz."
+        xz -dc "$LOCAL_BIN.xz" >"$LOCAL_BIN.part" || re_die "could not decompress $NAME.xz."
     elif command -v python3 >/dev/null 2>&1; then
         python3 -c 'import lzma, shutil, sys
 with lzma.open(sys.argv[1]) as src, open(sys.argv[2], "wb") as dst:
-    shutil.copyfileobj(src, dst)' "$TMP_XZ" "$TMP_XZ.out" || re_die "could not decompress $NAME.xz."
+    shutil.copyfileobj(src, dst)' "$LOCAL_BIN.xz" "$LOCAL_BIN.part" || re_die "could not decompress $NAME.xz."
     else
         re_die "'xz' or 'python3' is required to decompress $NAME.xz."
     fi
-    mv -f "$TMP_XZ.out" "$LOCAL_BIN"
-    rm -f "$TMP_XZ"
+    mv -f "$LOCAL_BIN.part" "$LOCAL_BIN"
+    rm -f "$LOCAL_BIN.xz"
     trap - EXIT
 fi
 
@@ -167,13 +163,9 @@ re_require_package "$SERIAL" "$PACKAGE"
 SCRIPTS_DIR="$FRIDA_DIR/unpinning/$UNPIN_REF"
 for SCRIPT in config.js $UNPIN_SCRIPTS; do
     if [ ! -f "$SCRIPTS_DIR/$SCRIPT" ] || [ -n "$REFRESH" ]; then
-        re_require curl
         echo "Downloading unpinning script $SCRIPT ($UNPIN_REF)..."
-        mkdir -p "$(dirname "$SCRIPTS_DIR/$SCRIPT")"
-        curl -fsSL -o "$SCRIPTS_DIR/$SCRIPT.tmp" \
-            "https://raw.githubusercontent.com/$UNPIN_REPO/$UNPIN_REF/$SCRIPT" \
-            || { rm -f "$SCRIPTS_DIR/$SCRIPT.tmp"; re_die "could not download $SCRIPT from $UNPIN_REPO@$UNPIN_REF."; }
-        mv -f "$SCRIPTS_DIR/$SCRIPT.tmp" "$SCRIPTS_DIR/$SCRIPT"
+        re_download "https://raw.githubusercontent.com/$UNPIN_REPO/$UNPIN_REF/$SCRIPT" "$SCRIPTS_DIR/$SCRIPT" -sS \
+            || re_die "could not download $SCRIPT from $UNPIN_REPO@$UNPIN_REF."
     fi
 done
 

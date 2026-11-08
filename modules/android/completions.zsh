@@ -74,6 +74,7 @@ _re_xapk_merger() {
         '(-a --alias)'{-a,--alias}'[key alias]:alias: ' \
         '(-j --jar)'{-j,--jar}'[APKEditor jar]:jar:_files -g "*.(#i)jar(-.)"' \
         '--no-obb[do not copy OBB data]' \
+        '--provision[download APKEditor, or update it to the latest release]' \
         '1:XAPK/APKS file or directory of APKs:_files -g "*.(#i)(xapk|zip|apks)(-.)"'
 }
 

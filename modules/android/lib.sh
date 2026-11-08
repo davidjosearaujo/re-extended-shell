@@ -83,6 +83,11 @@ re_pick_device() {
     echo "$SERIAL"
 }
 
+# Succeeds if adb shell on SERIAL already runs as root.
+re_adb_is_root() {
+    [ "$(adb -s "$1" shell id -u 2>/dev/null | tr -d '\r')" = "0" ]
+}
+
 # Prints how to run commands as root on SERIAL: 'adbd' (adb shell is already
 # root) or 'su' (Magisk/KernelSU). With --adb-root it first tries 'adb root',
 # which works on emulators and userdebug builds. Fails without root.
@@ -91,7 +96,7 @@ re_root_mode() {
     local TRY="" SERIAL
     if [ "$1" = "--adb-root" ]; then TRY=1; shift; fi
     SERIAL="$1"
-    if [ "$(adb -s "$SERIAL" shell id -u 2>/dev/null | tr -d '\r')" = "0" ]; then
+    if re_adb_is_root "$SERIAL"; then
         echo adbd; return 0
     fi
     if [ -n "$TRY" ]; then
@@ -99,9 +104,7 @@ re_root_mode() {
         if ! adb -s "$SERIAL" root 2>&1 | grep -q "cannot run as root"; then
             for _ in $(seq 1 15); do
                 sleep 1
-                if [ "$(adb -s "$SERIAL" shell id -u 2>/dev/null | tr -d '\r')" = "0" ]; then
-                    echo adbd; return 0
-                fi
+                if re_adb_is_root "$SERIAL"; then echo adbd; return 0; fi
             done
         fi
     fi

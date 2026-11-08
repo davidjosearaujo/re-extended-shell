@@ -90,7 +90,7 @@ Settings shared by every module (put them in `local/env.sh`):
 | `applog [-s SERIAL] [--start] <PKG>` | `logcat` for that app's process only. Waits for it to start and follows it across restarts. `--start` (re)launches it; arguments after `--` go to logcat. |
 | `launch-emulator-wireshark [-s SERIAL] [-i IFACE]` | Streams `tcpdump` from the device into a local Wireshark window. |
 | `xapk-installer [-s SERIAL \| -n AVD] <file.xapk>` | Installs every split in an XAPK/ZIP bundle with `adb install-multiple` and pushes any OBB data. |
-| `xapk-merger [options] <file.xapk\|.apks\|dir>` | Merges the splits (of a bundle, or a directory of APKs) into one installable APK with [APKEditor](https://github.com/REAndroid/APKEditor), downloaded on first use. Then zipaligns it and signs it with the debug keystore or your own (`-k`). |
+| `xapk-merger [options] <file.xapk\|.apks\|dir>` | Merges the splits (of a bundle, or a directory of APKs) into one installable APK with [APKEditor](https://github.com/REAndroid/APKEditor), downloaded on first use. Then zipaligns it and signs it with the debug keystore or your own (`-k`). `xapk-merger --provision` downloads APKEditor ahead of time, or updates it to the latest release. |
 | `androidcontainer` | Runs Google's Android emulator container (podman or docker) and connects adb to it as root. Linux only, it needs KVM. |
 
 Every command takes `-h`/`--help`, and all of them have tab completion in bash and zsh,
