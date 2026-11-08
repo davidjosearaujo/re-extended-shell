@@ -54,7 +54,9 @@ cd ~/re-extended-bash
 The installer adds one line to `~/.bashrc` and/or `~/.zshrc`, under an
 `# Installed by RE Extended Bash` comment, that sources `re_extended_bash_main`.
 Running it again is safe: it updates that line in place, for example after you move
-the repo. `./install --uninstall` removes it.
+the repo. `./uninstall` removes it; `./uninstall --purge` also deletes the
+downloaded APKEditor jar and the `zap-ready` snapshots of your AVDs. Neither touches
+the repo itself, so delete it afterwards to remove your `local/` settings and `certs/` too.
 
 Then export ZAP's root CA certificate to `certs/zap_root_ca.cer`, either from
 *Tools → Options → Network → Server Certificates → Save*, or with

@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# RE Extended Bash uninstaller: removes the shell hook and, with --purge, the
+# files the commands created outside this repo. Never deletes the repo itself.
+set -euo pipefail
+
+REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+APKEDITOR_DIR="$HOME/.local/share/apkeditor"
+AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
+SNAPSHOT="${RE_ZAP_SNAPSHOT:-zap-ready}"
+
+usage() {
+    cat <<EOF
+Usage: ./uninstall [--bash] [--zsh] [--purge]
+  Removes the RE Extended Bash hook from ~/.bashrc and/or ~/.zshrc (every rc
+  file that has it, unless a shell flag narrows it down).
+  --bash   Only ~/.bashrc
+  --zsh    Only \${ZDOTDIR:-\$HOME}/.zshrc
+  --purge  Also delete what the commands created outside the repo:
+             $APKEDITOR_DIR/APKEditor.jar (downloaded by xapk-merger)
+             the '$SNAPSHOT' snapshot of every AVD (saved by launch-emulator)
+  Your local/ settings and certs/ stay in $REPO;
+  delete that directory to remove them too.
+EOF
+}
+
+PURGE=""
+SHELLS=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --bash) SHELLS+=(bash); shift ;;
+        --zsh)  SHELLS+=(zsh); shift ;;
+        --purge) PURGE=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Error: Unknown option: $1" >&2; usage >&2; exit 1 ;;
+    esac
+done
+[ "${#SHELLS[@]}" -gt 0 ] || SHELLS=(bash zsh)   # missing rc files are skipped
+
+# shellcheck source=lib/rc.sh
+. "$REPO/lib/rc.sh"
+
+echo "Uninstalling RE Extended Bash:"
+for SH in "${SHELLS[@]}"; do
+    update_rc uninstall "$(rc_for "$SH")"
+done
+clean_legacy_profile
+
+# Prints "<avd name>\t<snapshot dir>" for every AVD that has the ZAP snapshot
+find_snapshots() {
+    local ini name dir
+    [ -d "$AVD_HOME" ] || return 0
+    for ini in "$AVD_HOME"/*.ini; do
+        [ -f "$ini" ] || continue
+        name=$(basename -- "$ini" .ini)
+        dir=$(sed -n 's/^path=//p' "$ini" 2>/dev/null)
+        [ -n "$dir" ] || dir="$AVD_HOME/$name.avd"
+        [ -d "$dir/snapshots/$SNAPSHOT" ] && printf '%s\t%s\n' "$name" "$dir"
+    done
+    return 0
+}
+
+JAR="$APKEDITOR_DIR/APKEditor.jar"
+SNAPSHOTS=$(find_snapshots)
+
+if [ -n "$PURGE" ]; then
+    if [ -f "$JAR" ]; then
+        rm -f "$JAR"
+        rmdir "$APKEDITOR_DIR" 2>/dev/null || true
+        echo "  Removed $JAR"
+    fi
+    while IFS=$'\t' read -r name dir; do
+        [ -n "$name" ] || continue
+        # The emulator holds *.lock files in the AVD dir while it runs
+        if compgen -G "$dir/*.lock" >/dev/null; then
+            echo "  Skipped snapshot '$SNAPSHOT' of $name: the emulator is running (run: kill-emulator $name)"
+            continue
+        fi
+        rm -rf -- "${dir:?}/snapshots/$SNAPSHOT"
+        echo "  Removed snapshot '$SNAPSHOT' of $name"
+    done <<<"$SNAPSHOTS"
+elif [ -f "$JAR" ] || [ -n "$SNAPSHOTS" ]; then
+    echo
+    echo "Left in place (run ./uninstall --purge to delete them):"
+    [ -f "$JAR" ] && echo "  $JAR"
+    while IFS=$'\t' read -r name _; do
+        [ -n "$name" ] && echo "  snapshot '$SNAPSHOT' of AVD $name"
+    done <<<"$SNAPSHOTS"
+fi
+
+echo
+echo "Your settings (local/) and certificates (certs/) are still in $REPO."
+echo "Delete that directory to remove RE Extended Bash completely."
+echo "Done. Open a new shell to drop the setup."
