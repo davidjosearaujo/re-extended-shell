@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Undo 'launch-emulator -d' on a physical device.
-# shellcheck source=../lib/android.sh
+# shellcheck source=../lib.sh
 _re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
 while [ -L "$_re_self" ]; do
     _re_link=$(readlink -- "$_re_self")
     case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
 done
-. "$(dirname -- "$_re_self")/../lib/android.sh"
+. "$(dirname -- "$_re_self")/../lib.sh"
 
 REBOOT="" SERIAL=""
 while [ "$#" -gt 0 ]; do
@@ -45,7 +45,16 @@ echo "Clearing global HTTP proxy..."
 echo "Removing adb reverse tunnel for port $RE_ZAP_PORT..."
 "${ADB[@]}" reverse --remove "tcp:$RE_ZAP_PORT" >/dev/null 2>&1
 
-echo "Removing pushed CA files..."
+# frida-server (from the frida-server command) runs out of the pushed files
+if [ -n "$("${ADB[@]}" shell "ls $RE_DEVICE_DIR/frida-server 2>/dev/null" | tr -d '\r')" ] \
+        && ROOT=$(re_root_mode "$SERIAL"); then
+    if [ -n "$(re_root_shell "$SERIAL" "$ROOT" "pidof frida-server" 2>/dev/null | tr -d '\r')" ]; then
+        echo "Stopping frida-server..."
+        re_root_shell "$SERIAL" "$ROOT" "kill \$(pidof frida-server)" >/dev/null 2>&1
+    fi
+fi
+
+echo "Removing pushed CA and frida-server files..."
 "${ADB[@]}" shell rm -rf "$RE_DEVICE_DIR"
 
 if [ -n "$REBOOT" ]; then

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Run Google's Android emulator container and connect adb to it.
-# shellcheck source=../lib/android.sh
+# shellcheck source=../lib.sh
 _re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
 while [ -L "$_re_self" ]; do
     _re_link=$(readlink -- "$_re_self")
     case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
 done
-. "$(dirname -- "$_re_self")/../lib/android.sh"
+. "$(dirname -- "$_re_self")/../lib.sh"
 
 IMAGE="${RE_ANDROID_CONTAINER_IMAGE:-us-docker.pkg.dev/android-emulator-268719/images/30-google-x64}"
 ENGINE="${RE_CONTAINER_ENGINE:-}"

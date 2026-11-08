@@ -1,43 +1,38 @@
 #!/usr/bin/env bash
 # Install an XAPK/split-APK bundle (all splits + OBB data) on a device.
-# shellcheck source=../lib/android.sh
+# shellcheck source=../lib.sh
 _re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
 while [ -L "$_re_self" ]; do
     _re_link=$(readlink -- "$_re_self")
     case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
 done
-. "$(dirname -- "$_re_self")/../lib/android.sh"
+. "$(dirname -- "$_re_self")/../lib.sh"
 
 DEVICE_SERIAL=""
 TARGET_AVD=""
 XAPK_FILE=""
 
+usage() {
+    echo "Usage: xapk-installer [-s <device_serial_or_id> | -n <avd_name>] <path_to_file.xapk | path_to_file.zip>"
+    echo ""
+    echo "Examples:"
+    echo "  xapk-installer -s R3CN80ABCDE game.xapk        # Install to a physical device"
+    echo "  xapk-installer -n Pixel_6_Pro game.zip         # Install to an emulator by AVD name"
+    echo "  xapk-installer game.xapk                       # Install to the only connected device"
+}
+
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
     case $1 in
-        -s|--serial) 
-            DEVICE_SERIAL="$2"
-            shift 2
-            ;;
-        -n|--name)
-            TARGET_AVD="$2"
-            shift 2
-            ;;
-        -h|--help)
-            echo "Usage: xapk-installer [-s <device_serial_or_id> | -n <avd_name>] <path_to_file.xapk | path_to_file.zip>"
-            echo ""
-            echo "Examples:"
-            echo "  xapk-installer -s R3CN80ABCDE game.xapk        # Install to a physical device"
-            echo "  xapk-installer -n Pixel_6_Pro game.zip         # Install to an emulator by AVD name"
-            echo "  xapk-installer game.xapk                       # Install to the only connected device"
-            exit 0
-            ;;
-        *) 
+        -s|--serial) DEVICE_SERIAL="$2"; shift 2 ;;
+        -n|--name)   TARGET_AVD="$2"; shift 2 ;;
+        -h|--help)   usage; exit 0 ;;
+        *)
             if [[ "$1" == *.xapk || "$1" == *.zip ]]; then
                 XAPK_FILE="$1"
             else
-                echo "Error: Unknown parameter or invalid file extension: $1"
-                echo "Usage: xapk-installer [-s <device_serial_or_id> | -n <avd_name>] <path_to_file.xapk | path_to_file.zip>"
+                echo "Error: Unknown parameter or invalid file extension: $1" >&2
+                usage >&2
                 exit 1
             fi
             shift
@@ -46,8 +41,8 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 if [ -z "$XAPK_FILE" ]; then
-    echo "Error: Please specify the path to a .xapk or .zip file."
-    echo "Usage: xapk-installer [-s <device_serial_or_id> | -n <avd_name>] <path_to_file.xapk | path_to_file.zip>"
+    echo "Error: Please specify the path to a .xapk or .zip file." >&2
+    usage >&2
     exit 1
 fi
 
@@ -56,30 +51,17 @@ if [ ! -f "$XAPK_FILE" ]; then
     exit 1
 fi
 
-# Check dependencies
-command -v unzip >/dev/null 2>&1 || { echo >&2 "Error: 'unzip' is required but not installed."; exit 1; }
-command -v adb >/dev/null 2>&1 || { echo >&2 "Error: 'adb' is required but not installed."; exit 1; }
+re_require unzip adb
 
 # If an AVD name was provided, resolve it to a serial number
 if [ -n "$TARGET_AVD" ]; then
     echo "Looking for emulator with AVD name: $TARGET_AVD..."
-    
-    EMULATORS=$(adb devices | grep -E 'emulator-[0-9]+' | awk '{print $1}')
-    
-    for EMU in $EMULATORS; do
-        CURRENT_AVD=$(adb -s "$EMU" emu avd name 2>/dev/null | head -n 1 | tr -d '\r')
-        
-        if [ "$CURRENT_AVD" == "$TARGET_AVD" ]; then
-            DEVICE_SERIAL="$EMU"
-            echo "Found $TARGET_AVD running on $DEVICE_SERIAL"
-            break
-        fi
-    done
-
+    DEVICE_SERIAL=$(re_running_emulators | awk -v n="$TARGET_AVD" '$2 == n { print $1; exit }')
     if [ -z "$DEVICE_SERIAL" ]; then
         echo "Error: Could not find a running emulator with AVD name '$TARGET_AVD'."
         exit 1
     fi
+    echo "Found $TARGET_AVD running on $DEVICE_SERIAL"
 fi
 
 # Check the device is available (or that exactly one is connected)

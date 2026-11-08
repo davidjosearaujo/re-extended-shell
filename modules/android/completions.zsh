@@ -1,0 +1,145 @@
+# Android module: zsh tab completion.
+
+_re_avds() {
+    local -a avds
+    avds=( ${ANDROID_AVD_HOME:-$HOME/.android/avd}/*.ini(N:t:r) )
+    _describe -t avds 'AVD' avds
+}
+
+_re_serials() {
+    local -a serials
+    (( $+commands[adb] )) || return 1
+    if [[ $1 == --physical ]]; then
+        serials=( ${(f)"$(adb devices 2>/dev/null | awk 'NR > 1 && $2 == "device" && $1 !~ /^emulator-/ { print $1 }')"} )
+    else
+        serials=( ${(f)"$(adb devices 2>/dev/null | awk 'NR > 1 && $2 == "device" { print $1 }')"} )
+    fi
+    _describe -t serials 'device serial' serials
+}
+
+# Packages installed on the device given with -s (or the only one connected).
+# Called from _arguments, which fills $opt_args.
+_re_packages() {
+    local -a pkgs args
+    local serial=${opt_args[-s]:-${opt_args[--serial]}}
+    (( $+commands[adb] )) || return 1
+    [[ -n $serial ]] && args=(-s $serial)
+    pkgs=( ${(f)"$(adb $args shell pm list packages 2>/dev/null | tr -d '\r' | sed 's/^package://')"} )
+    _describe -t packages 'package' pkgs
+}
+
+_re_launch_emulator() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '(--clean --wiped -d --device)'{--clean,--wiped}'[wiped boot, ignoring the snapshot]' \
+        '(--clean --wiped -d --device 1)'{-d,--device}'[use a connected physical device]::device serial:_re_serials --physical' \
+        '1:AVD name:_re_avds'
+}
+
+_re_kill_emulator() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '(-f --force)'{-f,--force}'[kill the process right away]' \
+        '1:AVD name:_re_avds'
+}
+
+_re_release_device() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '--reboot[also reboot, dropping the injected CA]' \
+        '1:device serial:_re_serials --physical'
+}
+
+_re_wireshark() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '(-s --serial)'{-s,--serial}'[device to capture from]:device serial:_re_serials' \
+        '(-i --interface)'{-i,--interface}'[device interface]:interface:(any wlan0 eth0 lo)'
+}
+
+_re_xapk_installer() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '(-s --serial -n --name)'{-s,--serial}'[target device]:device serial:_re_serials' \
+        '(-s --serial -n --name)'{-n,--name}'[target running emulator by AVD name]:AVD name:_re_avds' \
+        '1:XAPK file:_files -g "*.(#i)(xapk|zip)(-.)"'
+}
+
+_re_xapk_merger() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '(-o --output)'{-o,--output}'[output APK]:output APK:_files -g "*.(#i)apk(-.)"' \
+        '(-k --keystore)'{-k,--keystore}'[keystore to sign with]:keystore:_files' \
+        '(-p --ks-pass)'{-p,--ks-pass}'[keystore password]:password: ' \
+        '(-a --alias)'{-a,--alias}'[key alias]:alias: ' \
+        '(-j --jar)'{-j,--jar}'[APKEditor jar]:jar:_files -g "*.(#i)jar(-.)"' \
+        '--no-obb[do not copy OBB data]' \
+        '1:XAPK/APKS file or directory of APKs:_files -g "*.(#i)(xapk|zip|apks)(-.)"'
+}
+
+_re_androidcontainer() {
+    _arguments '(- *)'{-h,--help}'[show help]'
+}
+
+_re_frida_server() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '(-s --serial)'{-s,--serial}'[device to use]:device serial:_re_serials' \
+        '(--stop)--ssl-unpinning[spawn an app with SSL unpinning]:package:_re_packages' \
+        '(--stop)*'{-l,--load}'[extra Frida script]:script:_files -g "*.js(-.)"' \
+        '(--stop)--refresh[download frida-server and the scripts again]' \
+        '(--ssl-unpinning -l --load --refresh)--stop[kill frida-server on the device]'
+}
+
+_re_apk_pull() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '(-s --serial)'{-s,--serial}'[device to pull from]:device serial:_re_serials' \
+        '--merge[save a single merged APK]' \
+        '(-f --force)'{-f,--force}'[replace an existing output]' \
+        '1:package:_re_packages'
+}
+
+_re_apk_decompile() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '(-o --output)'{-o,--output}'[output directory]:directory:_files -/' \
+        '(--apktool-only)--jadx-only[only run jadx]' \
+        '(--jadx-only)--apktool-only[only run apktool]' \
+        '--deobf[deobfuscate names with jadx]' \
+        '(-f --force)'{-f,--force}'[replace existing output]' \
+        '1:APK file:_files -g "*.(#i)apk(-.)"'
+}
+
+_re_apk_patch() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '(-o --output)'{-o,--output}'[output APK]:output APK:_files -g "*.(#i)apk(-.)"' \
+        '(-k --keystore)'{-k,--keystore}'[keystore to sign with]:keystore:_files' \
+        '(-p --ks-pass)'{-p,--ks-pass}'[keystore password]:password: ' \
+        '(-a --alias)'{-a,--alias}'[key alias]:alias: ' \
+        '--no-debuggable[leave android\:debuggable as it is]' \
+        '1:APK file:_files -g "*.(#i)apk(-.)"'
+}
+
+_re_applog() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '(-s --serial)'{-s,--serial}'[device to use]:device serial:_re_serials' \
+        '--start[force-stop and launch the app first]' \
+        '1:package:_re_packages' \
+        '*::logcat argument: '
+}
+
+compdef _re_launch_emulator launch-emulator
+compdef _re_kill_emulator kill-emulator
+compdef _re_release_device release-device
+compdef _re_wireshark launch-emulator-wireshark
+compdef _re_xapk_installer xapk-installer
+compdef _re_xapk_merger xapk-merger
+compdef _re_androidcontainer androidcontainer
+compdef _re_frida_server frida-server
+compdef _re_apk_pull apk-pull
+compdef _re_apk_decompile apk-decompile
+compdef _re_apk_patch apk-patch
+compdef _re_applog applog

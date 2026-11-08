@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Merge XAPK/APKS splits into a single signed APK.
-# shellcheck source=../lib/android.sh
+# Merge XAPK/APKS splits (or a directory of split APKs) into a single signed APK.
+# shellcheck source=../lib.sh
 _re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
 while [ -L "$_re_self" ]; do
     _re_link=$(readlink -- "$_re_self")
     case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
 done
-. "$(dirname -- "$_re_self")/../lib/android.sh"
+. "$(dirname -- "$_re_self")/../lib.sh"
 
 INPUT_FILE=""
 OUTPUT_APK=""
@@ -19,27 +19,14 @@ KEEP_OBB=1
 SKIP_SIGN=0
 
 usage() {
-    echo "Usage: xapk-merger [-o <output.apk>] [-k <keystore> [-p <ks_pass>] [-a <alias>]] [-j <APKEditor.jar>] [--no-obb] <path_to_file.xapk | .zip | .apks>"
+    echo "Usage: xapk-merger [-o <output.apk>] [-k <keystore> [-p <ks_pass>] [-a <alias>]] [-j <APKEditor.jar>] [--no-obb] <path_to_file.xapk | .zip | .apks | directory>"
     echo ""
     echo "Examples:"
     echo "  xapk-merger game.xapk                              # -> ./game_merged.apk (debug-signed)"
+    echo "  xapk-merger com.example.app-splits/                # A directory of split APKs (e.g. from apk-pull)"
     echo "  xapk-merger -o out/app.apk game.zip                # Custom output path"
     echo "  xapk-merger -k my.jks -p secret -a mykey game.xapk # Sign with your own keystore"
     echo "  xapk-merger -j ~/tools/APKEditor.jar game.xapk     # Force a specific APKEditor jar"
-}
-
-find_build_tool() {
-    local tool="$1" sdk latest
-    if command -v "$tool" >/dev/null 2>&1; then command -v "$tool"; return 0; fi
-    for sdk in "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$HOME/Android/Sdk" "$HOME/Library/Android/sdk"; do
-        [ -z "$sdk" ] && continue
-        latest=$(ls -d "$sdk"/build-tools/*/ 2>/dev/null | sort -V | tail -n 1)
-        if [ -n "$latest" ] && [ -x "${latest}${tool}" ]; then
-            echo "${latest}${tool}"
-            return 0
-        fi
-    done
-    return 1
 }
 
 # Parse arguments
@@ -53,8 +40,8 @@ while [[ "$#" -gt 0 ]]; do
         --no-obb)      KEEP_OBB=0; shift ;;
         -h|--help)     usage; exit 0 ;;
         *)
-            # Accepts .xapk, .zip and .apks
-            if [[ "$1" == *.xapk || "$1" == *.zip || "$1" == *.apks ]]; then
+            # Accepts .xapk, .zip, .apks and a directory of APKs
+            if [[ -d "$1" || "$1" == *.xapk || "$1" == *.zip || "$1" == *.apks ]]; then
                 INPUT_FILE="$1"
             else
                 echo "Error: Unknown parameter or invalid file extension: $1"
@@ -67,20 +54,21 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 if [ -z "$INPUT_FILE" ]; then
-    echo "Error: Please specify the path to a .xapk, .zip or .apks file."
+    echo "Error: Please specify the path to a .xapk, .zip or .apks file, or a directory of APKs."
     usage
     exit 1
 fi
 
-if [ ! -f "$INPUT_FILE" ]; then
+if [ ! -f "$INPUT_FILE" ] && [ ! -d "$INPUT_FILE" ]; then
     echo "Error: File not found: $INPUT_FILE"
     exit 1
 fi
 
 # Check dependencies
-command -v unzip >/dev/null 2>&1 || { echo >&2 "Error: 'unzip' is required but not installed."; exit 1; }
-APKSIGNER=$(find_build_tool apksigner) || { echo >&2 "Error: 'apksigner' not found (PATH or \$ANDROID_HOME/build-tools)."; exit 1; }
-ZIPALIGN=$(find_build_tool zipalign) || ZIPALIGN=""
+if [ ! -d "$INPUT_FILE" ]; then
+    command -v unzip >/dev/null 2>&1 || { echo >&2 "Error: 'unzip' is required but not installed."; exit 1; }
+fi
+re_find_build_tool apksigner >/dev/null || { echo >&2 "Error: 'apksigner' not found (PATH or \$ANDROID_HOME/build-tools)."; exit 1; }
 
 # Resolve APKEditor: -j <jar> > 'apkeditor' on PATH > download jar
 if [ -n "$APKEDITOR_JAR" ]; then
@@ -109,19 +97,25 @@ echo "Using APKEditor: ${APKEDITOR_CMD[*]}"
 # Default output name: <input>_merged.apk in current dir
 if [ -z "$OUTPUT_APK" ]; then
     BASE=$(basename "$INPUT_FILE")
-    OUTPUT_APK="$PWD/${BASE%.*}_merged.apk"
+    [ -d "$INPUT_FILE" ] || BASE="${BASE%.*}"
+    OUTPUT_APK="$PWD/${BASE}_merged.apk"
 fi
 mkdir -p "$(dirname "$OUTPUT_APK")"
 
 # Create temp directory and ensure it gets cleaned up (even on failure/Ctrl+C)
 TMP_DIR=$(mktemp -d)
 trap 'echo "Cleaning up temporary files..."; rm -rf "$TMP_DIR"' EXIT
-EXTRACT_DIR="$TMP_DIR/extracted"
 SPLITS_DIR="$TMP_DIR/splits"
-mkdir -p "$EXTRACT_DIR" "$SPLITS_DIR"
+mkdir -p "$SPLITS_DIR"
 
-echo "Extracting '$INPUT_FILE' to temporary directory..."
-unzip -q "$INPUT_FILE" -d "$EXTRACT_DIR" || { echo "Error: Failed to extract archive."; exit 1; }
+if [ -d "$INPUT_FILE" ]; then
+    EXTRACT_DIR="$INPUT_FILE"   # already a directory of APKs, read it in place
+else
+    EXTRACT_DIR="$TMP_DIR/extracted"
+    mkdir -p "$EXTRACT_DIR"
+    echo "Extracting '$INPUT_FILE' to temporary directory..."
+    unzip -q "$INPUT_FILE" -d "$EXTRACT_DIR" || { echo "Error: Failed to extract archive."; exit 1; }
+fi
 
 APK_FILES=()
 while IFS= read -r -d $'\0'; do
@@ -129,7 +123,7 @@ while IFS= read -r -d $'\0'; do
 done < <(find "$EXTRACT_DIR" -type f -name "*.apk" -print0)
 
 if [ ${#APK_FILES[@]} -eq 0 ]; then
-    echo "Error: No APK files found inside the archive."
+    echo "Error: No APK files found in '$INPUT_FILE'."
     exit 1
 fi
 
@@ -160,47 +154,7 @@ else
 fi
 
 if [ "$SKIP_SIGN" -eq 0 ]; then
-    # zipalign MUST happen before apksigner (v2+ signatures cover the whole file)
-    TO_SIGN="$TMP_DIR/merged-unsigned.apk"
-    if [ -n "$ZIPALIGN" ]; then
-        echo "Aligning APK..."
-        if "$ZIPALIGN" -p -f 4 "$TO_SIGN" "$TMP_DIR/merged-aligned.apk"; then
-            TO_SIGN="$TMP_DIR/merged-aligned.apk"
-        else
-            echo "Warning: zipalign failed, signing unaligned APK."
-        fi
-    else
-        echo "Warning: 'zipalign' not found, skipping alignment."
-    fi
-
-    # Fall back to the Android debug keystore
-    if [ -z "$KEYSTORE" ]; then
-        KEYSTORE="$HOME/.android/debug.keystore"
-        KS_PASS="android"
-        KS_ALIAS="androiddebugkey"
-        if [ ! -f "$KEYSTORE" ]; then
-            command -v keytool >/dev/null 2>&1 || { echo >&2 "Error: 'keytool' is required to create a debug keystore."; exit 1; }
-            echo "Creating debug keystore at $KEYSTORE..."
-            mkdir -p "$HOME/.android"
-            keytool -genkeypair -keystore "$KEYSTORE" -storepass android -keypass android \
-                -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
-                -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1 \
-                || { echo "Error: Failed to create debug keystore."; exit 1; }
-        fi
-    fi
-
-    echo "Signing with '$KEYSTORE' (alias: $KS_ALIAS)..."
-    if ! "$APKSIGNER" sign --ks "$KEYSTORE" --ks-pass "pass:$KS_PASS" --ks-key-alias "$KS_ALIAS" \
-            --v4-signing-enabled false --out "$OUTPUT_APK" "$TO_SIGN"; then
-        echo "APK signing failed."
-        exit 1
-    fi
-
-    if "$APKSIGNER" verify "$OUTPUT_APK" >/dev/null 2>&1; then
-        echo "Signature verified."
-    else
-        echo "Warning: apksigner verify reported problems."
-    fi
+    re_sign_apk "$TMP_DIR/merged-unsigned.apk" "$OUTPUT_APK" "$KEYSTORE" "$KS_PASS" "$KS_ALIAS" || exit 1
 fi
 
 # Handle OBB Data (can't be embedded in an APK, so copy alongside)

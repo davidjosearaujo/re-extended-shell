@@ -1,57 +1,83 @@
 # RE Extended Shell - entry point.
 #
 # This is the only file your shell sources (the install script adds the line to
-# ~/.bashrc and/or ~/.zshrc). It loads the rest of the setup, one file per kind
-# of thing, in this order:
+# ~/.bashrc and/or ~/.zshrc). Everything else lives in modules/<name>/, one
+# folder per theme (core, android, ...), each with any of:
 #
-#   env          environment variables
-#   paths        PATH entries
-#   <topic>      every other config/<topic>.sh (android, ...): that topic's
-#                environment and tools, in alphabetical order
-#   functions    shell functions that must run inside your shell (cd, export, ...)
-#   aliases      aliases
-#   completions  tab completion for the commands in bin/ (interactive shells only)
+#   env.sh             environment variables
+#   paths.sh           PATH entries (the module's bin/ is added automatically)
+#   functions.sh       shell functions that must run inside your shell
+#   aliases.sh         aliases
+#   completions.bash   tab completion (interactive shells only)
+#   completions.zsh
 #
-# For each one, config/<name>.sh (shipped with the repo) is loaded first, then
-# local/<name>.sh (yours, git-ignored) so your settings win. The commands
-# themselves live in bin/ as standalone bash scripts, which paths.sh puts on
-# your PATH, so they behave the same in bash and zsh.
+# They load one kind at a time, across all modules: every env.sh, then every
+# paths.sh, and so on. 'core' always comes first, the others alphabetically.
+# Your own files in local/ (git-ignored) load around them:
 #
-# Everything here must be valid in both bash and zsh.
+#   env          modules/core/env.sh, local/env.sh, then for each module
+#                local/<module>.sh followed by modules/<module>/env.sh
+#   paths        modules/*/paths.sh + modules/*/bin, then local/paths.sh
+#   functions    modules/*/functions.sh, then local/functions.sh
+#   aliases      modules/*/aliases.sh, then local/aliases.sh
+#   completions  modules/*/completions.<shell>, then local/completions.sh
+#
+# The commands in modules/*/bin are standalone bash scripts, so they behave the
+# same in bash and zsh. Everything here must be valid in both bash and zsh.
 
 if [ -n "${BASH_VERSION:-}" ]; then
     RE_EXT_HOME=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+    _re_shell=bash
 elif [ -n "${ZSH_VERSION:-}" ]; then
     # zsh-only syntax, hidden from bash's parser
     eval 'RE_EXT_HOME=${${(%):-%x}:A:h}'
+    _re_shell=zsh
 else
     echo "RE Extended Shell: unsupported shell (bash and zsh only), not loading." >&2
     return 0 2>/dev/null || exit 0
 fi
 export RE_EXT_HOME
 
-# A plain loop, not a function: 'declare'/'typeset' in a sourced file would
-# otherwise make its variables local to that function.
-for _re_module in env paths @topics functions aliases completions; do
-    if [ "$_re_module" = completions ]; then
+# Module names, core first. Only prints: the sourcing below happens in plain
+# loops, because 'declare'/'typeset' in a file sourced from a function would
+# make its variables local to that function.
+_re_modules() {
+    local _d _m
+    echo core
+    for _d in "$RE_EXT_HOME"/modules/*/; do
+        _m=${_d%/}
+        _m=${_m##*/}
+        if [ "$_m" != core ]; then echo "$_m"; fi
+    done
+}
+
+# env: core, then yours, then each module after its own local/<module>.sh
+if [ -r "$RE_EXT_HOME/modules/core/env.sh" ]; then . "$RE_EXT_HOME/modules/core/env.sh"; fi
+if [ -r "$RE_EXT_HOME/local/env.sh" ]; then . "$RE_EXT_HOME/local/env.sh"; fi
+for _re_module in $(_re_modules); do
+    [ "$_re_module" = core ] && continue
+    if [ -r "$RE_EXT_HOME/local/$_re_module.sh" ]; then . "$RE_EXT_HOME/local/$_re_module.sh"; fi
+    if [ -r "$RE_EXT_HOME/modules/$_re_module/env.sh" ]; then . "$RE_EXT_HOME/modules/$_re_module/env.sh"; fi
+done
+
+# paths, functions, aliases, completions: every module, then yours
+for _re_kind in paths functions aliases completions; do
+    if [ "$_re_kind" = completions ]; then
         case "$-" in *i*) ;; *) continue ;; esac
     fi
-    if [ "$_re_module" = @topics ]; then
-        for _re_file in "$RE_EXT_HOME"/config/*.sh; do
-            _re_topic=${_re_file##*/}
-            _re_topic=${_re_topic%.sh}
-            case "$_re_topic" in env|paths|functions|aliases|completions) continue ;; esac
-            . "$_re_file"
-            if [ -r "$RE_EXT_HOME/local/$_re_topic.sh" ]; then
-                . "$RE_EXT_HOME/local/$_re_topic.sh"
-            fi
-        done
-        continue
-    fi
-    for _re_file in "$RE_EXT_HOME/config/$_re_module.sh" "$RE_EXT_HOME/local/$_re_module.sh"; do
-        if [ -r "$_re_file" ]; then
-            . "$_re_file"
+    for _re_module in $(_re_modules); do
+        _re_dir="$RE_EXT_HOME/modules/$_re_module"
+        if [ "$_re_kind" = completions ]; then
+            _re_file="$_re_dir/completions.$_re_shell"
+        else
+            _re_file="$_re_dir/$_re_kind.sh"
         fi
+        if [ -r "$_re_file" ]; then . "$_re_file"; fi
+        if [ "$_re_kind" = paths ] && [ -d "$_re_dir/bin" ]; then re_path_append "$_re_dir/bin"; fi
     done
+    if [ -r "$RE_EXT_HOME/local/$_re_kind.sh" ]; then . "$RE_EXT_HOME/local/$_re_kind.sh"; fi
+    if [ "$_re_kind" = paths ]; then export PATH; fi
 done
-unset _re_module _re_file _re_topic
+
+unset _re_shell _re_module _re_kind _re_dir _re_file
+unset -f _re_modules

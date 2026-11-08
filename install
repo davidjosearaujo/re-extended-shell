@@ -49,12 +49,21 @@ for SH in "${SHELLS[@]}"; do
 done
 clean_legacy_profile
 
-# Personal overrides, never committed
-if [ ! -d "$REPO/local" ]; then
-    mkdir -p "$REPO/local"
-    cp "$REPO"/local.example/*.sh "$REPO/local/"
-    echo "Created local/ for your own settings (from local.example/)."
-fi
+# Personal settings, never committed: local/<kind>.sh from local.example/, and
+# local/<module>.sh from each module's local.example.sh. Existing files are
+# never touched, so this also adds the templates of modules added later.
+mkdir -p "$REPO/local"
+for TEMPLATE in "$REPO"/local.example/*.sh "$REPO"/modules/*/local.example.sh; do
+    [ -f "$TEMPLATE" ] || continue
+    case "$TEMPLATE" in
+        */local.example.sh) NAME=$(basename -- "$(dirname -- "$TEMPLATE")").sh ;;
+        *) NAME=$(basename -- "$TEMPLATE") ;;
+    esac
+    if [ ! -e "$REPO/local/$NAME" ]; then
+        cp "$TEMPLATE" "$REPO/local/$NAME"
+        echo "  Created local/$NAME (your settings)"
+    fi
+done
 
 mkdir -p "$REPO/certs"
 if [ ! -f "$REPO/certs/zap_root_ca.cer" ]; then

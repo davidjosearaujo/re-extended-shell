@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Bash tab completion for the Android commands (helpers: common.bash).
+# Android module: bash tab completion (helpers in modules/core/completions.bash).
 
 # AVD names, read from the .ini files (much faster than 'emulator -list-avds')
 _re_avds() {
@@ -19,6 +19,24 @@ _re_serials() {
     else
         adb devices 2>/dev/null | awk 'NR > 1 && $2 == "device" { print $1 }'
     fi
+}
+
+# Value of -s/--serial earlier on the command line, if any
+_re_comp_serial() {
+    local i
+    for ((i = 1; i < COMP_CWORD; i++)); do
+        case "${COMP_WORDS[i]}" in
+            -s|--serial) echo "${COMP_WORDS[i+1]}"; return ;;
+        esac
+    done
+}
+
+# Packages installed on the device given with -s (or the only one connected)
+_re_packages() {
+    command -v adb >/dev/null 2>&1 || return 0
+    local serial
+    serial=$(_re_comp_serial)
+    adb ${serial:+-s "$serial"} shell pm list packages 2>/dev/null | tr -d '\r' | sed 's/^package://'
 }
 
 _re_complete_launch_emulator() {
@@ -93,6 +111,69 @@ _re_complete_androidcontainer() {
     _re_reply_words "-h --help"
 }
 
+_re_complete_frida_server() {
+    local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
+    case "$prev" in
+        -s|--serial)     _re_reply_words "$(_re_serials)"; return ;;
+        --ssl-unpinning) _re_reply_words "$(_re_packages)"; return ;;
+        -l|--load)       _re_reply_files "js"; return ;;
+    esac
+    _re_reply_words "-s --serial --ssl-unpinning -l --load --refresh --stop -h --help"
+}
+
+_re_complete_apk_pull() {
+    local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
+    case "$prev" in
+        -s|--serial) _re_reply_words "$(_re_serials)"; return ;;
+    esac
+    if [[ "$cur" == -* ]]; then
+        _re_reply_words "-s --serial --merge -f --force -h --help"
+    else
+        _re_reply_words "$(_re_packages)"
+    fi
+}
+
+_re_complete_apk_decompile() {
+    local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
+    case "$prev" in
+        -o|--output) _re_reply_dirs; return ;;
+    esac
+    if [[ "$cur" == -* ]]; then
+        _re_reply_words "-o --output --jadx-only --apktool-only --deobf -f --force -h --help"
+    else
+        _re_reply_files "apk"
+    fi
+}
+
+_re_complete_apk_patch() {
+    local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
+    case "$prev" in
+        -o|--output)   _re_reply_files "apk"; return ;;
+        -k|--keystore) _re_reply_files ""; return ;;
+        -p|--ks-pass|-a|--alias) COMPREPLY=(); return ;;
+    esac
+    if [[ "$cur" == -* ]]; then
+        _re_reply_words "-o --output -k --keystore -p --ks-pass -a --alias --no-debuggable -h --help"
+    else
+        _re_reply_files "apk"
+    fi
+}
+
+_re_complete_applog() {
+    local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]} i
+    for ((i = 1; i < COMP_CWORD; i++)); do
+        [ "${COMP_WORDS[i]}" = "--" ] && { COMPREPLY=(); return; }   # logcat's own arguments
+    done
+    case "$prev" in
+        -s|--serial) _re_reply_words "$(_re_serials)"; return ;;
+    esac
+    if [[ "$cur" == -* ]]; then
+        _re_reply_words "-s --serial --start -h --help --"
+    else
+        _re_reply_words "$(_re_packages)"
+    fi
+}
+
 complete -F _re_complete_launch_emulator launch-emulator
 complete -F _re_complete_kill_emulator kill-emulator
 complete -F _re_complete_release_device release-device
@@ -100,3 +181,8 @@ complete -F _re_complete_wireshark launch-emulator-wireshark
 complete -F _re_complete_xapk_installer xapk-installer
 complete -F _re_complete_xapk_merger xapk-merger
 complete -F _re_complete_androidcontainer androidcontainer
+complete -F _re_complete_frida_server frida-server
+complete -F _re_complete_apk_pull apk-pull
+complete -F _re_complete_apk_decompile apk-decompile
+complete -F _re_complete_apk_patch apk-patch
+complete -F _re_complete_applog applog

@@ -1,5 +1,6 @@
-# PATH entries (sourced by bash and zsh).
-# Topic-specific tools (e.g. the Android SDK) are added by config/<topic>.sh.
+# Core module: PATH helpers (sourced by bash and zsh).
+# Loaded before every other module's paths.sh, so they can use these. Each
+# module's bin/ is added by the loader.
 
 # Appends a directory to PATH if it exists and isn't there yet, so re-sourcing
 # your rc file doesn't grow PATH. Also handy in local/paths.sh.
@@ -17,8 +18,3 @@ re_path_prepend() {
         *) if [ -d "$1" ]; then PATH="$1:$PATH"; fi ;;
     esac
 }
-
-# The RE Extended Shell commands
-re_path_append "$RE_EXT_HOME/bin"
-
-export PATH

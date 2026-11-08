@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+# Start the frida-server matching the host's Frida on a rooted device and,
+# optionally, spawn an app with HTTP Toolkit's SSL unpinning scripts.
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+FRIDA_DIR="$RE_DATA_DIR/frida"
+UNPIN_REPO="httptoolkit/frida-interception-and-unpinning"
+UNPIN_REF="${RE_FRIDA_UNPIN_REF:-main}"
+# Loaded in this order, config.js first (it defines what the others use)
+UNPIN_SCRIPTS="${RE_FRIDA_UNPIN_SCRIPTS:-native-tls-hook.js android/android-proxy-override.js android/android-system-certificate-injection.js android/android-certificate-unpinning.js android/android-certificate-unpinning-fallback.js}"
+
+usage() {
+    cat <<EOF
+Usage: frida-server [-s SERIAL] [--refresh] [--ssl-unpinning PACKAGE [-l SCRIPT]...]
+       frida-server [-s SERIAL] --stop
+  Downloads the frida-server build matching this machine's 'frida --version'
+  and the device's CPU, pushes it and starts it as root. Does nothing if that
+  version is already running. Needs root (adb root, or su via Magisk/KernelSU).
+  -s, --serial SERIAL      Device to use (optional with a single device)
+  --ssl-unpinning PACKAGE  Then spawn PACKAGE under Frida with HTTP Toolkit's
+                           unpinning scripts: the app trusts the ZAP CA despite
+                           certificate pinning, and is forced through the same
+                           proxy launch-emulator sets ($RE_ZAP_PORT on this machine).
+                           Exit the Frida REPL (Ctrl+D) to detach.
+  -l, --load SCRIPT        Extra Frida script to load after the unpinning ones
+                           (repeatable, needs --ssl-unpinning)
+  --refresh                Download frida-server and the unpinning scripts again
+  --stop                   Kill frida-server on the device
+  Settings: RE_FRIDA_UNPIN_SCRIPTS, RE_FRIDA_UNPIN_REF (see README).
+EOF
+}
+
+SERIAL="" PACKAGE="" REFRESH="" STOP="" EXTRA=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -s|--serial)
+            [ "$#" -ge 2 ] || re_die "$1 needs a device serial."
+            SERIAL="$2"; shift 2 ;;
+        --ssl-unpinning)
+            if [ "$#" -lt 2 ] || [ "${2#-}" != "$2" ]; then re_die "--ssl-unpinning needs a package name."; fi
+            PACKAGE="$2"; shift 2 ;;
+        -l|--load)
+            [ "$#" -ge 2 ] || re_die "$1 needs a script path."
+            [ -f "$2" ] || re_die "script not found: $2"
+            EXTRA+=("$2"); shift 2 ;;
+        --refresh) REFRESH=1; shift ;;
+        --stop) STOP=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) re_die "Unknown parameter: $1 (see frida-server --help)" ;;
+    esac
+done
+[ "${#EXTRA[@]}" -eq 0 ] || [ -n "$PACKAGE" ] || re_die "-l/--load needs --ssl-unpinning PACKAGE."
+[ -z "$STOP" ] || [ -z "$PACKAGE" ] || re_die "--stop and --ssl-unpinning don't go together."
+
+re_require adb
+SERIAL=$(re_pick_device "frida-server -s" "$SERIAL") || exit 1
+ROOT=$(re_root_mode --adb-root "$SERIAL") \
+    || re_die "no root on $SERIAL (needs an emulator with a Google APIs image, a userdebug build, or su)."
+
+DEVICE_BIN="$RE_DEVICE_DIR/frida-server"
+running_pids() {
+    re_root_shell "$SERIAL" "$ROOT" "pidof frida-server" 2>/dev/null | tr -d '\r'
+}
+kill_server() {
+    local PIDS
+    PIDS=$(running_pids)
+    [ -n "$PIDS" ] || return 0
+    re_root_shell "$SERIAL" "$ROOT" "kill $PIDS" >/dev/null 2>&1
+    for _ in $(seq 1 10); do
+        [ -z "$(running_pids)" ] && return 0
+        sleep 0.5
+    done
+    re_root_shell "$SERIAL" "$ROOT" "kill -9 $PIDS" >/dev/null 2>&1
+}
+
+if [ -n "$STOP" ]; then
+    if [ -z "$(running_pids)" ]; then
+        echo "frida-server is not running on $SERIAL."
+    else
+        kill_server
+        echo "Stopped frida-server on $SERIAL."
+    fi
+    exit 0
+fi
+
+re_require frida
+VERSION=$(frida --version 2>/dev/null | tr -d '\r')
+[ -n "$VERSION" ] || re_die "could not read the version from 'frida --version'."
+
+ABI=$(adb -s "$SERIAL" shell getprop ro.product.cpu.abi 2>/dev/null | tr -d '\r')
+case "$ABI" in
+    arm64-v8a)       ARCH=arm64 ;;
+    armeabi-v7a|armeabi) ARCH=arm ;;
+    x86_64)          ARCH=x86_64 ;;
+    x86)             ARCH=x86 ;;
+    *) re_die "unsupported device ABI '$ABI'." ;;
+esac
+
+# Download (once per version and architecture) to the cache
+NAME="frida-server-$VERSION-android-$ARCH"
+LOCAL_BIN="$FRIDA_DIR/$NAME"
+if [ ! -f "$LOCAL_BIN" ] || [ -n "$REFRESH" ]; then
+    re_require curl
+    mkdir -p "$FRIDA_DIR"
+    echo "Downloading $NAME..."
+    TMP_XZ=$(mktemp "$FRIDA_DIR/.download.XXXXXX")
+    trap 'rm -f "$TMP_XZ" "$TMP_XZ.out"' EXIT
+    curl -fL --progress-bar -o "$TMP_XZ" \
+        "https://github.com/frida/frida/releases/download/$VERSION/$NAME.xz" \
+        || re_die "download failed (is there a $VERSION release for android-$ARCH?)."
+    # xz isn't installed on stock macOS, but Python (which Frida needs) can do it
+    if command -v xz >/dev/null 2>&1; then
+        xz -dc "$TMP_XZ" >"$TMP_XZ.out" || re_die "could not decompress $NAME.xz."
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 -c 'import lzma, shutil, sys
+with lzma.open(sys.argv[1]) as src, open(sys.argv[2], "wb") as dst:
+    shutil.copyfileobj(src, dst)' "$TMP_XZ" "$TMP_XZ.out" || re_die "could not decompress $NAME.xz."
+    else
+        re_die "'xz' or 'python3' is required to decompress $NAME.xz."
+    fi
+    mv -f "$TMP_XZ.out" "$LOCAL_BIN"
+    rm -f "$TMP_XZ"
+    trap - EXIT
+fi
+
+# Start it, unless this very version already runs
+DEVICE_VERSION=$(adb -s "$SERIAL" shell cat "$DEVICE_BIN.version" 2>/dev/null | tr -d '\r')
+if [ -n "$(running_pids)" ] && [ "$DEVICE_VERSION" = "$VERSION" ] && [ -z "$REFRESH" ]; then
+    echo "frida-server $VERSION is already running on $SERIAL."
+else
+    if [ -n "$(running_pids)" ]; then
+        echo "Stopping the frida-server already running on $SERIAL (${DEVICE_VERSION:-unknown version})..."
+        kill_server
+    fi
+    echo "Pushing frida-server $VERSION ($ARCH) to $SERIAL..."
+    adb -s "$SERIAL" shell mkdir -p "$RE_DEVICE_DIR" || exit 1
+    adb -s "$SERIAL" push "$LOCAL_BIN" "$DEVICE_BIN" >/dev/null || re_die "push failed."
+    adb -s "$SERIAL" shell chmod 755 "$DEVICE_BIN"
+    adb -s "$SERIAL" shell "echo $VERSION > $DEVICE_BIN.version"
+
+    echo "Starting frida-server as root ($ROOT)..."
+    # Redirect on the device: the daemon would otherwise keep adb's output
+    # open, and 'adb shell' would never return
+    re_root_shell "$SERIAL" "$ROOT" "$DEVICE_BIN -D </dev/null >/dev/null 2>&1" </dev/null >/dev/null 2>&1
+    STARTED=""
+    for _ in $(seq 1 20); do
+        if [ -n "$(running_pids)" ]; then STARTED=1; break; fi
+        sleep 0.5
+    done
+    [ -n "$STARTED" ] || re_die "frida-server did not start (try running '$DEVICE_BIN' in a root shell to see why)."
+    echo "frida-server $VERSION running on $SERIAL."
+fi
+
+[ -n "$PACKAGE" ] || exit 0
+
+# --- SSL unpinning -----------------------------------------------------------
+
+re_require_package "$SERIAL" "$PACKAGE"
+
+# HTTP Toolkit's scripts (AGPL-3.0) are downloaded, not shipped with this repo
+SCRIPTS_DIR="$FRIDA_DIR/unpinning/$UNPIN_REF"
+for SCRIPT in config.js $UNPIN_SCRIPTS; do
+    if [ ! -f "$SCRIPTS_DIR/$SCRIPT" ] || [ -n "$REFRESH" ]; then
+        re_require curl
+        echo "Downloading unpinning script $SCRIPT ($UNPIN_REF)..."
+        mkdir -p "$(dirname "$SCRIPTS_DIR/$SCRIPT")"
+        curl -fsSL -o "$SCRIPTS_DIR/$SCRIPT.tmp" \
+            "https://raw.githubusercontent.com/$UNPIN_REPO/$UNPIN_REF/$SCRIPT" \
+            || { rm -f "$SCRIPTS_DIR/$SCRIPT.tmp"; re_die "could not download $SCRIPT from $UNPIN_REPO@$UNPIN_REF."; }
+        mv -f "$SCRIPTS_DIR/$SCRIPT.tmp" "$SCRIPTS_DIR/$SCRIPT"
+    fi
+done
+
+WORK_DIR=$(mktemp -d)
+trap 'rm -rf "$WORK_DIR"' EXIT
+re_prepare_cert "$WORK_DIR"
+
+# Same proxy as launch-emulator: the emulator reaches this machine at 10.0.2.2;
+# anything else gets the port tunnelled back over adb
+case "$SERIAL" in
+    emulator-*) PROXY_HOST="10.0.2.2" ;;
+    *)
+        PROXY_HOST="127.0.0.1"
+        adb -s "$SERIAL" reverse "tcp:$RE_ZAP_PORT" "tcp:$RE_ZAP_PORT" >/dev/null \
+            || re_die "could not forward the device's port $RE_ZAP_PORT to ZAP (adb reverse)."
+        ;;
+esac
+re_port_listening "$RE_ZAP_PORT" || echo "Warning: nothing listens on port $RE_ZAP_PORT, is ZAP running?"
+
+# config.js with the ZAP CA and proxy filled in
+CONFIG="$WORK_DIR/config.js"
+awk -v pem="$RE_CERT_FILE" -v host="$PROXY_HOST" -v port="$RE_ZAP_PORT" -v q="'" '
+    /^const CERT_PEM = `/ {
+        cert = ""
+        while ((getline line < pem) > 0) cert = cert (cert == "" ? "" : "\n") line
+        print "const CERT_PEM = `" cert "`;"
+        skip = 1
+    }
+    skip { if ($0 ~ /`;[[:space:]]*$/) skip = 0; next }
+    /^const PROXY_HOST = / { print "const PROXY_HOST = " q host q ";"; next }
+    /^const PROXY_PORT = / { print "const PROXY_PORT = " port ";"; next }
+    { print }
+' "$SCRIPTS_DIR/config.js" >"$CONFIG"
+if ! grep -q -- '-----BEGIN CERTIFICATE-----' "$CONFIG" || grep -qF '[!! Put your CA certificate' "$CONFIG" \
+        || ! grep -q "^const PROXY_PORT = $RE_ZAP_PORT;" "$CONFIG"; then
+    re_die "could not fill in $SCRIPTS_DIR/config.js (its format changed?). Try --refresh, or pin RE_FRIDA_UNPIN_REF."
+fi
+
+LOADS=(-l "$CONFIG")
+for SCRIPT in $UNPIN_SCRIPTS; do LOADS+=(-l "$SCRIPTS_DIR/$SCRIPT"); done
+for SCRIPT in "${EXTRA[@]}"; do LOADS+=(-l "$SCRIPT"); done
+
+echo "Spawning $PACKAGE with SSL unpinning (proxy $PROXY_HOST:$RE_ZAP_PORT). Exit the REPL to detach."
+frida -D "$SERIAL" -f "$PACKAGE" "${LOADS[@]}"

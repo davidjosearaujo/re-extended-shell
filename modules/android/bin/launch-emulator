@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Launch an Android emulator (or set up a connected physical device) with the
 # ZAP root CA injected as a system CA and all traffic proxied through ZAP.
-# shellcheck source=../lib/android.sh
+# shellcheck source=../lib.sh
 _re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
 while [ -L "$_re_self" ]; do
     _re_link=$(readlink -- "$_re_self")
     case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
 done
-. "$(dirname -- "$_re_self")/../lib/android.sh"
+. "$(dirname -- "$_re_self")/../lib.sh"
 
 usage() {
     cat <<EOF
@@ -125,31 +125,8 @@ else
 fi
 
 # Root: 'adb root' works on emulators and userdebug builds; rooted retail
-# phones (Magisk/KernelSU) only offer su, so fall back to it on devices.
-IS_ROOT="" USE_SU=""
-if [ "$("${ADB[@]}" shell id -u 2>/dev/null | tr -d '\r')" = "0" ]; then
-    IS_ROOT=1
-else
-    echo "Restarting adb daemon with root privileges..."
-    if ! "${ADB[@]}" root 2>&1 | grep -q "cannot run as root"; then
-        for _ in $(seq 1 15); do
-            if [ "$("${ADB[@]}" shell id -u 2>/dev/null | tr -d '\r')" = "0" ]; then
-                IS_ROOT=1
-                break
-            fi
-            sleep 1
-        done
-    fi
-fi
-if [ -z "$IS_ROOT" ] && [ "$MODE" = "device" ]; then
-    echo "adbd can't run as root on this build, trying su (approve the root prompt on the device if one appears)..."
-    "${ADB[@]}" wait-for-device
-    if [ "$("${ADB[@]}" shell "su -c 'id -u'" 2>/dev/null | tr -d '\r')" = "0" ]; then
-        IS_ROOT=1
-        USE_SU=1
-    fi
-fi
-if [ -z "$IS_ROOT" ]; then
+# phones (Magisk/KernelSU) only offer su, which re_root_mode falls back to.
+if ! ROOT=$(re_root_mode --adb-root "$SERIAL"); then
     if [ "$MODE" = "device" ]; then
         re_die "no root on $SERIAL (needs a userdebug build or a working su, e.g. Magisk/KernelSU)."
     else
@@ -161,13 +138,12 @@ fi
 # (restored snapshot, or a device that hasn't rebooted since the last run)
 echo "Pushing certificate ($RE_CERT_HASH.0) and CA injection script..."
 "${ADB[@]}" shell mkdir -p "$RE_DEVICE_DIR" || exit 1
-"${ADB[@]}" push "$RE_CERT_FILE" "$RE_EXT_HOME/device/inject_ca.sh" "$RE_DEVICE_DIR/" >/dev/null || exit 1
+"${ADB[@]}" push "$RE_CERT_FILE" "$RE_ANDROID_DIR/device/inject_ca.sh" "$RE_DEVICE_DIR/" >/dev/null || exit 1
 "${ADB[@]}" shell chmod 755 "$RE_DEVICE_DIR/inject_ca.sh"
 
 echo "Executing CA injection script..."
-INJECT_CMD="$RE_DEVICE_DIR/inject_ca.sh $RE_DEVICE_DIR/$RE_CERT_HASH.0"
-[ -n "$USE_SU" ] && INJECT_CMD="su -c '$INJECT_CMD'"
-"${ADB[@]}" shell "$INJECT_CMD" || re_die "CA injection failed."
+re_root_shell "$SERIAL" "$ROOT" "$RE_DEVICE_DIR/inject_ca.sh $RE_DEVICE_DIR/$RE_CERT_HASH.0" \
+    || re_die "CA injection failed."
 
 if [ "$MODE" = "device" ]; then
     # 10.0.2.2 only exists inside the emulator; tunnel the device's localhost

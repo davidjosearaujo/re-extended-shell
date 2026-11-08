@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Decompile an APK with jadx (Java) and apktool (smali, manifest, resources).
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+usage() {
+    cat <<EOF
+Usage: apk-decompile [-o DIR] [--jadx-only | --apktool-only] [--deobf] [-f] <file.apk>
+  Decompiles an APK into ./<name>/ (or DIR):
+    jadx/     Java sources and resources (jadx)
+    apktool/  smali, decoded AndroidManifest.xml and resources (apktool),
+              which 'apktool b' can rebuild
+  Runs whichever of jadx and apktool is installed, both if possible.
+  -o, --output DIR  Output directory (default: ./<apk name without .apk>)
+  --jadx-only       Only run jadx
+  --apktool-only    Only run apktool
+  --deobf           Ask jadx to rename obfuscated classes and members
+  -f, --force       Replace existing jadx/ and apktool/ output in DIR
+  jadx has no 'apt' package and installs many ways, so set JADX to its command
+  if it isn't 'jadx' on PATH (e.g. JADX="flatpak run com.github.skylot.jadx",
+  or a path to a downloaded binary); likewise JADX_GUI for the browse hint.
+  For split APKs (.xapk/.apks), merge them first: xapk-merger or apk-pull --merge.
+EOF
+}
+
+OUT="" APK="" DO_JADX=1 DO_APKTOOL=1 ONLY="" DEOBF="" FORCE=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -o|--output)
+            [ "$#" -ge 2 ] || re_die "$1 needs a directory."
+            OUT="$2"; shift 2 ;;
+        --jadx-only) DO_APKTOOL=""; ONLY=1; shift ;;
+        --apktool-only) DO_JADX=""; ONLY=1; shift ;;
+        --deobf) DEOBF=1; shift ;;
+        -f|--force) FORCE=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        -*) re_die "Unknown option: $1 (see apk-decompile --help)" ;;
+        *)
+            [ -z "$APK" ] || re_die "only one APK at a time."
+            APK="$1"; shift ;;
+    esac
+done
+[ -n "$APK" ] || { usage >&2; exit 1; }
+[ -n "$DO_JADX" ] || [ -n "$DO_APKTOOL" ] || re_die "--jadx-only and --apktool-only don't go together."
+[ -f "$APK" ] || re_die "file not found: $APK"
+re_reject_bundle "$APK"
+
+# Use what's installed; insist only on what was explicitly asked for. jadx is
+# configurable (JADX) since it has no standard package; apktool does, so it's a
+# plain command.
+JADX_CMD=() HAVE_JADX="" HAVE_APKTOOL=""
+if re_tool_cmd "${JADX:-jadx}"; then JADX_CMD=("${RE_TOOL_CMD[@]}"); HAVE_JADX=1; fi
+command -v apktool >/dev/null 2>&1 && HAVE_APKTOOL=1
+[ -n "$HAVE_JADX$HAVE_APKTOOL" ] \
+    || re_die "needs jadx (set JADX if installed, https://github.com/skylot/jadx) and/or apktool (https://apktool.org)."
+if [ -n "$DO_JADX" ] && [ -z "$HAVE_JADX" ]; then
+    [ -n "$ONLY" ] && re_die "jadx not found (set JADX to its command, e.g. 'flatpak run com.github.skylot.jadx'; https://github.com/skylot/jadx)."
+    echo "Warning: jadx not found, skipping Java decompilation (set JADX if it's installed; https://github.com/skylot/jadx)."
+    DO_JADX=""
+fi
+if [ -n "$DO_APKTOOL" ] && [ -z "$HAVE_APKTOOL" ]; then
+    [ -n "$ONLY" ] && re_die "'apktool' is required (https://apktool.org)."
+    echo "Warning: 'apktool' not found, skipping smali and resources (https://apktool.org)."
+    DO_APKTOOL=""
+fi
+
+if [ -z "$OUT" ]; then
+    BASE=$(basename "$APK")
+    OUT="$PWD/${BASE%.*}"
+fi
+for TOOL in ${DO_JADX:+jadx} ${DO_APKTOOL:+apktool}; do
+    if [ -e "$OUT/$TOOL" ]; then
+        [ -n "$FORCE" ] || re_die "$OUT/$TOOL already exists (use -f to replace it)."
+        rm -rf -- "${OUT:?}/$TOOL"
+    fi
+done
+mkdir -p "$OUT" || exit 1
+
+FAILED=""
+if [ -n "$DO_APKTOOL" ]; then
+    echo "apktool: decoding into $OUT/apktool/..."
+    if ! apktool d -f -o "$OUT/apktool" "$APK"; then
+        echo "Warning: apktool failed."
+        FAILED=1
+    fi
+fi
+if [ -n "$DO_JADX" ]; then
+    echo "jadx: decompiling into $OUT/jadx/ (this can take a while)..."
+    JADX_ARGS=(-d "$OUT/jadx")
+    [ -n "$DEOBF" ] && JADX_ARGS+=(--deobf)
+    # jadx exits non-zero when a few methods fail to decompile, which is normal
+    if ! "${JADX_CMD[@]}" "${JADX_ARGS[@]}" "$APK"; then
+        if [ -d "$OUT/jadx/sources" ]; then
+            echo "jadx finished with errors (some code didn't decompile, see above)."
+        else
+            echo "Warning: jadx failed."
+            FAILED=1
+        fi
+    fi
+fi
+
+echo
+echo "Output in $OUT/"
+[ -n "$DO_APKTOOL" ] && [ -d "$OUT/apktool" ] && echo "  apktool/  smali, AndroidManifest.xml, res/ (rebuild with: apktool b \"$OUT/apktool\")"
+[ -n "$DO_JADX" ] && [ -d "$OUT/jadx" ] && echo "  jadx/     sources/ and resources/ (browse with: ${JADX_GUI:-jadx-gui} \"$APK\")"
+[ -z "$FAILED" ]

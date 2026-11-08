@@ -1,16 +1,21 @@
 # shellcheck shell=bash
-# RE Extended Shell - helpers shared by every command in bin/, whatever the topic.
+# RE Extended Shell - helpers shared by the commands of every module.
 # Sourced by those scripts (always bash), never by your interactive shell.
-# Topic-specific helpers live next to it (lib/android.sh, ...) and source this.
+# Each module's own helpers live in modules/<module>/lib.sh, which sources this.
 # Must stay valid in bash 3.2 (macOS's /bin/bash) and work with both GNU
 # (Linux) and BSD (macOS) userland tools.
 
-RE_EXT_HOME=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+RE_EXT_HOME=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 
-# Interception proxy, shared by any topic that routes traffic through ZAP.
+# Interception proxy, shared by any module that routes traffic through ZAP.
 # Export either of these (e.g. in local/env.sh) to override.
 RE_ZAP_PORT="${RE_ZAP_PORT:-9090}"
 RE_ZAP_CERT="${RE_ZAP_CERT:-$RE_EXT_HOME/certs/zap_root_ca.cer}"
+
+# Downloads and caches the commands keep outside the repo (removed by
+# './uninstall --purge'). Each module uses its own subdirectory.
+# shellcheck disable=SC2034  # used by the scripts that source this file
+RE_DATA_DIR="$HOME/.local/share/re-extended-shell"
 
 re_die() {
     echo "Error: $*" >&2
@@ -62,6 +67,20 @@ re_find_gui_tool() {
         done
     fi
     return 1
+}
+
+# Succeeds if version $1 is lower than $2, comparing the leading numeric
+# major.minor.patch parts (suffixes like "-dirty" are ignored).
+# Usage: re_version_lt 2.7.0-dirty 2.9
+re_version_lt() {
+    awk -v a="$1" -v b="$2" 'BEGIN {
+        n = split(a, x, /[^0-9]+/); m = split(b, y, /[^0-9]+/)
+        for (i = 1; i <= 3; i++) {
+            if (x[i] + 0 < y[i] + 0) exit 0
+            if (x[i] + 0 > y[i] + 0) exit 1
+        }
+        exit 1
+    }'
 }
 
 # Exits with export instructions unless $RE_ZAP_CERT exists

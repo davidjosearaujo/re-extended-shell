@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# logcat for one app's process, following it across restarts.
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+usage() {
+    cat <<EOF
+Usage: applog [-s SERIAL] [--start] <PACKAGE> [-- LOGCAT_ARGS...]
+  Shows the logcat of PACKAGE's main process only. Waits for the app to start,
+  and re-attaches whenever it restarts (Ctrl+C to stop).
+  -s, --serial SERIAL  Device to use (optional with a single device)
+  --start              Force-stop the app and launch it, to catch its startup
+  Anything after -- goes to logcat, e.g.:
+    applog com.example.app -- '*:W'          warnings and errors only
+    applog com.example.app -- -v time        another output format
+EOF
+}
+
+SERIAL="" START="" PACKAGE="" LOGCAT_ARGS=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -s|--serial)
+            [ "$#" -ge 2 ] || re_die "$1 needs a device serial."
+            SERIAL="$2"; shift 2 ;;
+        --start) START=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        --) shift; LOGCAT_ARGS+=("$@"); break ;;
+        -*) re_die "Unknown option: $1 (see applog --help)" ;;
+        *)
+            [ -z "$PACKAGE" ] || re_die "only one package at a time (logcat options go after --)."
+            PACKAGE="$1"; shift ;;
+    esac
+done
+[ -n "$PACKAGE" ] || { usage >&2; exit 1; }
+
+re_require adb
+SERIAL=$(re_pick_device "applog -s" "$SERIAL") || exit 1
+re_require_package "$SERIAL" "$PACKAGE"
+ADB=(adb -s "$SERIAL")
+
+[ -t 1 ] && LOGCAT_ARGS=(-v color "${LOGCAT_ARGS[@]}")
+
+LOGCAT_PID=""
+stop_logcat() {
+    if [ -n "$LOGCAT_PID" ]; then
+        kill "$LOGCAT_PID" 2>/dev/null
+        wait "$LOGCAT_PID" 2>/dev/null
+        LOGCAT_PID=""
+    fi
+}
+# Background jobs of a script ignore Ctrl+C, so logcat is stopped explicitly
+trap stop_logcat EXIT
+trap 'exit 130' INT TERM
+
+if [ -n "$START" ]; then
+    echo "--- restarting $PACKAGE ---" >&2
+    "${ADB[@]}" shell am force-stop "$PACKAGE"
+    "${ADB[@]}" shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 \
+        || echo "Warning: could not launch $PACKAGE (no launcher activity?), start it yourself." >&2
+fi
+
+CURRENT=""
+while :; do
+    PID=$("${ADB[@]}" shell pidof -s "$PACKAGE" 2>/dev/null | tr -d '\r')
+    if [ -z "$PID" ] && [ "$("${ADB[@]}" get-state 2>/dev/null)" != "device" ]; then
+        re_die "lost the connection to $SERIAL."
+    fi
+    if [ "$PID" != "$CURRENT" ]; then
+        # Let logcat flush the last lines (a crash, say) of the old process
+        [ -n "$CURRENT" ] && sleep 1
+        stop_logcat
+        if [ -n "$PID" ]; then
+            echo "--- $PACKAGE running (pid $PID) ---" >&2
+            # Without -T, logcat first prints what's buffered from this pid
+            "${ADB[@]}" logcat --pid="$PID" "${LOGCAT_ARGS[@]}" </dev/null &
+            LOGCAT_PID=$!
+        else
+            echo "--- waiting for $PACKAGE to start ---" >&2
+        fi
+        CURRENT="$PID"
+    fi
+    sleep 1
+done

@@ -1,27 +1,18 @@
 #!/usr/bin/env bash
 # Shut down a running emulator by AVD name.
-# shellcheck source=../lib/android.sh
+# shellcheck source=../lib.sh
 _re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
 while [ -L "$_re_self" ]; do
     _re_link=$(readlink -- "$_re_self")
     case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
 done
-. "$(dirname -- "$_re_self")/../lib/android.sh"
+. "$(dirname -- "$_re_self")/../lib.sh"
 
 usage() {
     echo "Usage: kill-emulator [-f|--force] <AVD_NAME>"
     echo "  Asks the emulator to shut down cleanly (adb emu kill). If it can't be reached"
     echo "  over adb, or doesn't exit within 15s, its process is terminated instead."
     echo "  -f, --force  Skip the clean shutdown and kill the process right away (SIGKILL)"
-}
-
-# Prints "SERIAL AVD_NAME" for every running emulator adb knows about
-running_emulators() {
-    local S NAME
-    for S in $(adb devices 2>/dev/null | awk 'NR > 1 && $1 ~ /^emulator-/ { print $1 }'); do
-        NAME=$(adb -s "$S" emu avd name 2>/dev/null | head -n 1 | tr -d '\r')
-        echo "$S ${NAME:-?}"
-    done
 }
 
 # PIDs of the emulator process for exactly this AVD (not just a name prefix)
@@ -41,18 +32,18 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+re_require adb
+
 if [ -z "$AVD_NAME" ]; then
     echo "Error: Please specify the AVD name to kill."
     usage
-    RUNNING=$(running_emulators)
+    RUNNING=$(re_running_emulators)
     [ -n "$RUNNING" ] && { echo "Running emulators:"; sed 's/^/  /' <<<"$RUNNING"; }
     exit 1
 fi
 
-re_require adb
-
 PIDS=$(emulator_pids "$AVD_NAME")
-SERIAL=$(running_emulators | awk -v n="$AVD_NAME" '$2 == n { print $1; exit }')
+SERIAL=$(re_running_emulators | awk -v n="$AVD_NAME" '$2 == n { print $1; exit }')
 
 if [ -z "$PIDS" ] && [ -z "$SERIAL" ]; then
     echo "No running emulator found with the name: $AVD_NAME"

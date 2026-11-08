@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# Patch an APK for interception on unrooted devices: trust user CAs and the ZAP
+# CA (overriding certificate pins), make it debuggable, then rebuild and sign.
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+usage() {
+    cat <<EOF
+Usage: apk-patch [-o <output.apk>] [-k <keystore> [-p <ks_pass>] [-a <alias>]] [--no-debuggable] <file.apk>
+  Makes an app interceptable on a device without root:
+  - replaces its network security config with one that trusts user-installed
+    CAs and the ZAP CA (embedded in the APK, from $RE_ZAP_CERT if present),
+    overriding any <pin-set>, and allows cleartext HTTP;
+  - sets android:debuggable="true" (unless --no-debuggable);
+  - rebuilds it with apktool, zipaligns it and signs it (debug keystore unless -k).
+  Pinning done in code (OkHttp CertificatePinner, custom TrustManagers, ...) is
+  not affected; for that use 'frida-server --ssl-unpinning' on a rooted device.
+  -o, --output FILE   Output APK (default: ./<name>_patched.apk)
+  -k, --keystore FILE Sign with this keystore (-p password, -a alias)
+  --no-debuggable     Leave android:debuggable as it is
+  For split APKs (.xapk/.apks), merge them first: xapk-merger or apk-pull --merge.
+  The patched app has a different signature: uninstall the original before
+  installing it.
+EOF
+}
+
+APK="" OUTPUT_APK="" KEYSTORE="" KS_PASS="android" KS_ALIAS="androiddebugkey" DEBUGGABLE=1
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -o|--output|-k|--keystore|-p|--ks-pass|-a|--alias)
+            [ "$#" -ge 2 ] || re_die "$1 needs a value."
+            case "$1" in
+                -o|--output)   OUTPUT_APK="$2" ;;
+                -k|--keystore) KEYSTORE="$2" ;;
+                -p|--ks-pass)  KS_PASS="$2" ;;
+                -a|--alias)    KS_ALIAS="$2" ;;
+            esac
+            shift 2 ;;
+        --no-debuggable) DEBUGGABLE=""; shift ;;
+        -h|--help) usage; exit 0 ;;
+        -*) re_die "Unknown option: $1 (see apk-patch --help)" ;;
+        *)
+            [ -z "$APK" ] || re_die "only one APK at a time."
+            APK="$1"; shift ;;
+    esac
+done
+[ -n "$APK" ] || { usage >&2; exit 1; }
+[ -f "$APK" ] || re_die "file not found: $APK"
+re_reject_bundle "$APK"
+[ -z "$KEYSTORE" ] || [ -f "$KEYSTORE" ] || re_die "keystore not found: $KEYSTORE"
+re_require apktool
+re_find_build_tool apksigner >/dev/null || re_die "'apksigner' not found (PATH or \$ANDROID_HOME/build-tools)."
+
+if [ -z "$OUTPUT_APK" ]; then
+    BASE=$(basename "$APK")
+    OUTPUT_APK="$PWD/${BASE%.*}_patched.apk"
+fi
+mkdir -p "$(dirname "$OUTPUT_APK")" || exit 1
+
+WORK_DIR=$(mktemp -d)
+trap 'rm -rf "$WORK_DIR"' EXIT
+SRC="$WORK_DIR/src"
+
+# -s: keep the dex files as they are, only the manifest and resources change
+echo "Decoding $APK with apktool..."
+apktool d -s -f -o "$SRC" "$APK" || re_die "apktool could not decode $APK."
+MANIFEST="$SRC/AndroidManifest.xml"
+[ -f "$MANIFEST" ] || re_die "no AndroidManifest.xml in the decoded APK."
+
+# The ZAP CA, embedded so the app trusts it without installing it on the device
+ZAP_ANCHOR=""
+if [ -f "$RE_ZAP_CERT" ]; then
+    mkdir -p "$SRC/res/raw"
+    re_prepare_cert "$WORK_DIR"
+    cp "$RE_CERT_FILE" "$SRC/res/raw/re_zap_ca.pem"
+    ZAP_ANCHOR='            <certificates src="@raw/re_zap_ca" overridePins="true" />'
+    echo "Embedding the ZAP CA ($RE_ZAP_CERT)."
+else
+    echo "Warning: no ZAP CA at $RE_ZAP_CERT, the app will trust user-installed CAs only."
+fi
+
+mkdir -p "$SRC/res/xml"
+{
+    echo '<?xml version="1.0" encoding="utf-8"?>'
+    echo '<!-- Added by apk-patch (RE Extended Shell) -->'
+    echo '<network-security-config>'
+    echo '    <base-config cleartextTrafficPermitted="true">'
+    echo '        <trust-anchors>'
+    echo '            <certificates src="system" />'
+    echo '            <certificates src="user" overridePins="true" />'
+    [ -n "$ZAP_ANCHOR" ] && echo "$ZAP_ANCHOR"
+    echo '        </trust-anchors>'
+    echo '    </base-config>'
+    echo '</network-security-config>'
+} >"$SRC/res/xml/re_network_security_config.xml"
+
+# apktool writes each start tag on one line: rewrite the <application> one
+ATTRS=' android:networkSecurityConfig="@xml/re_network_security_config"'
+[ -n "$DEBUGGABLE" ] && ATTRS="$ATTRS android:debuggable=\"true\""
+awk -v attrs="$ATTRS" -v dbg="$DEBUGGABLE" '
+    !done && /<application([[:space:]>\/]|$)/ {
+        gsub(/[[:space:]]android:networkSecurityConfig="[^"]*"/, "")
+        if (dbg != "") gsub(/[[:space:]]android:debuggable="[^"]*"/, "")
+        sub(/<application/, "<application" attrs)
+        done = 1
+    }
+    { print }
+    END { if (!done) exit 1 }
+' "$MANIFEST" >"$MANIFEST.new" || re_die "no <application> element found in AndroidManifest.xml."
+mv -f "$MANIFEST.new" "$MANIFEST"
+grep -q 'android:networkSecurityConfig="@xml/re_network_security_config"' "$MANIFEST" \
+    || re_die "could not patch AndroidManifest.xml."
+echo "Patched AndroidManifest.xml: network security config${DEBUGGABLE:+, debuggable}."
+
+PKG=$(sed -n 's/.*<manifest[^>]* package="\([^"]*\)".*/\1/p' "$MANIFEST" | head -n 1)
+
+# apktool before 2.9 builds with the legacy aapt by default, which rejects what
+# modern apps contain: switch it to aapt2, preferably the SDK's current one
+BUILD_ARGS=()
+APKTOOL_VERSION=$(apktool --version 2>/dev/null | head -n 1)
+if re_version_lt "$APKTOOL_VERSION" 2.9; then
+    BUILD_ARGS+=(--use-aapt2)
+    AAPT2=$(re_find_build_tool aapt2) && BUILD_ARGS+=(-a "$AAPT2")
+fi
+
+echo "Rebuilding with apktool ${APKTOOL_VERSION}..."
+if ! apktool b "${BUILD_ARGS[@]}" -o "$WORK_DIR/unsigned.apk" "$SRC"; then
+    if re_version_lt "$APKTOOL_VERSION" 2.12; then
+        re_die "apktool could not rebuild the APK. apktool $APKTOOL_VERSION is old and its Android framework lacks newer attributes; install the latest from https://apktool.org and try again."
+    fi
+    re_die "apktool could not rebuild the APK."
+fi
+
+re_sign_apk "$WORK_DIR/unsigned.apk" "$OUTPUT_APK" "$KEYSTORE" "$KS_PASS" "$KS_ALIAS" || exit 1
+
+echo "Patched APK: $OUTPUT_APK"
+echo "Install it with: adb uninstall ${PKG:-<package>} && adb install \"$OUTPUT_APK\""

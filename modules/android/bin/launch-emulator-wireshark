@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Live capture of a device's traffic (tcpdump on the device) into Wireshark.
-# shellcheck source=../lib/android.sh
+# shellcheck source=../lib.sh
 _re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
 while [ -L "$_re_self" ]; do
     _re_link=$(readlink -- "$_re_self")
     case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
 done
-. "$(dirname -- "$_re_self")/../lib/android.sh"
+. "$(dirname -- "$_re_self")/../lib.sh"
 
 SERIAL="" IFACE="any"
 while [ "$#" -gt 0 ]; do
@@ -16,7 +16,7 @@ while [ "$#" -gt 0 ]; do
         -h|--help)
             echo "Usage: launch-emulator-wireshark [-s SERIAL] [-i INTERFACE]"
             echo "  Streams tcpdump from the device into a local Wireshark window."
-            echo "  Needs root on the device (adb root, or su) and a tcpdump binary on it."
+            echo "  Needs root on the device (runs 'adb root' if needed, or uses su) and a tcpdump binary on it."
             echo "  -s, --serial     Device to capture from (optional with a single device)"
             echo "  -i, --interface  Device interface to capture on (default: any)"
             exit 0
@@ -33,12 +33,11 @@ SERIAL=$(re_pick_device "launch-emulator-wireshark -s" "$SERIAL") || exit 1
 adb -s "$SERIAL" shell command -v tcpdump >/dev/null 2>&1 \
     || re_die "no tcpdump binary on $SERIAL (push a static arm64/x86_64 build to /system/bin or /data/local/tmp)."
 
+ROOT=$(re_root_mode --adb-root "$SERIAL") \
+    || re_die "no root on $SERIAL (needs an emulator with a Google APIs image, a userdebug build, or su)."
 CAPTURE="tcpdump -i $IFACE -U -s 0 -w - 2>/dev/null"
-if [ "$(adb -s "$SERIAL" shell id -u 2>/dev/null | tr -d '\r')" != "0" ]; then
-    adb -s "$SERIAL" shell "su -c 'id -u'" 2>/dev/null | grep -q '^0' \
-        || re_die "no root on $SERIAL (run 'adb root' on emulators/userdebug builds, or use a su-rooted device)."
-    CAPTURE="su -c '$CAPTURE'"
-fi
+# exec-out, not re_root_shell: the pcap stream must reach Wireshark unaltered
+[ "$ROOT" = su ] && CAPTURE="su -c '$CAPTURE'"
 
 echo "Capturing '$IFACE' on $SERIAL into Wireshark (close Wireshark to stop)..."
 adb -s "$SERIAL" exec-out "$CAPTURE" </dev/null | "$WIRESHARK" -k -i - >/dev/null 2>&1 &

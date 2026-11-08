@@ -4,9 +4,6 @@
 set -euo pipefail
 
 REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-APKEDITOR_DIR="$HOME/.local/share/apkeditor"
-AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
-SNAPSHOT="${RE_ZAP_SNAPSHOT:-zap-ready}"
 
 usage() {
     cat <<EOF
@@ -15,9 +12,8 @@ Usage: ./uninstall [--bash] [--zsh] [--purge]
   file that has it, unless a shell flag narrows it down).
   --bash   Only ~/.bashrc (and ~/.bash_profile, ~/.bash_login)
   --zsh    Only \${ZDOTDIR:-\$HOME}/.zshrc
-  --purge  Also delete what the commands created outside the repo:
-             $APKEDITOR_DIR/APKEditor.jar (downloaded by xapk-merger)
-             the '$SNAPSHOT' snapshot of every AVD (saved by launch-emulator)
+  --purge  Also delete what the modules' commands created outside the repo
+           (downloads, caches, emulator snapshots). Without it, they're listed.
   Your local/ settings and certs/ stay in $REPO;
   delete that directory to remove them too.
 EOF
@@ -47,46 +43,28 @@ for SH in "${SHELLS[@]}"; do
 done
 clean_legacy_profile
 
-# Prints "<avd name>\t<snapshot dir>" for every AVD that has the ZAP snapshot
-find_snapshots() {
-    local ini name dir
-    [ -d "$AVD_HOME" ] || return 0
-    for ini in "$AVD_HOME"/*.ini; do
-        [ -f "$ini" ] || continue
-        name=$(basename -- "$ini" .ini)
-        dir=$(sed -n 's/^path=//p' "$ini" 2>/dev/null)
-        [ -n "$dir" ] || dir="$AVD_HOME/$name.avd"
-        [ -d "$dir/snapshots/$SNAPSHOT" ] && printf '%s\t%s\n' "$name" "$dir"
-    done
-    return 0
-}
-
-JAR="$APKEDITOR_DIR/APKEditor.jar"
-SNAPSHOTS=$(find_snapshots)
-
-if [ -n "$PURGE" ]; then
-    if [ -f "$JAR" ]; then
-        rm -f "$JAR"
-        rmdir "$APKEDITOR_DIR" 2>/dev/null || true
-        echo "  Removed $JAR"
+# Called by each module's purge.sh for every file or folder its commands left
+# outside the repo: deletes it with --purge, otherwise notes it for the list.
+LEFT=()
+re_purge() {
+    local TARGET="$1" LABEL="${2:-$1}"
+    [ -e "$TARGET" ] || return 0
+    if [ -n "$PURGE" ]; then
+        rm -rf -- "$TARGET"
+        echo "  Removed $LABEL"
+    else
+        LEFT+=("$LABEL")
     fi
-    while IFS=$'\t' read -r name dir; do
-        [ -n "$name" ] || continue
-        # The emulator holds *.lock files in the AVD dir while it runs
-        if compgen -G "$dir/*.lock" >/dev/null; then
-            echo "  Skipped snapshot '$SNAPSHOT' of $name: the emulator is running (run: kill-emulator $name)"
-            continue
-        fi
-        rm -rf -- "${dir:?}/snapshots/$SNAPSHOT"
-        echo "  Removed snapshot '$SNAPSHOT' of $name"
-    done <<<"$SNAPSHOTS"
-elif [ -f "$JAR" ] || [ -n "$SNAPSHOTS" ]; then
+}
+for PURGE_FILE in "$REPO"/modules/*/purge.sh; do
+    [ -f "$PURGE_FILE" ] || continue
+    # shellcheck disable=SC1090
+    . "$PURGE_FILE"
+done
+if [ "${#LEFT[@]}" -gt 0 ]; then
     echo
     echo "Left in place (run ./uninstall --purge to delete them):"
-    [ -f "$JAR" ] && echo "  $JAR"
-    while IFS=$'\t' read -r name _; do
-        [ -n "$name" ] && echo "  snapshot '$SNAPSHOT' of AVD $name"
-    done <<<"$SNAPSHOTS"
+    printf '  %s\n' "${LEFT[@]}"
 fi
 
 echo

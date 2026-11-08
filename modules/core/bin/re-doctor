@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# Check that RE Extended Shell and each module's tools are set up correctly.
+# Read-only: it never changes anything, on this machine or on a device.
+_re_shell_home=${RE_EXT_HOME:-}   # set by re_extended_shell_main in your shell
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+# Every module with checks (modules/<module>/doctor.sh), core aside: it always runs
+ALL_MODULES=()
+for _f in "$RE_EXT_HOME"/modules/*/doctor.sh; do
+    _m=${_f%/doctor.sh}; _m=${_m##*/}
+    [ "$_m" = core ] || ALL_MODULES+=("$_m")
+done
+
+usage() {
+    echo "Usage: re-doctor [MODULE...]"
+    echo "  Checks the shell setup, the ZAP certificate and proxy, then each module's"
+    echo "  tools, emulators and connected devices, and says how to fix what's missing."
+    echo "  Changes nothing. Exits non-zero if something required is missing."
+    echo "  Modules: ${ALL_MODULES[*]} (default: all)"
+}
+
+MODULES=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        -*) re_die "Unknown option: $1 (see re-doctor --help)" ;;
+        *)
+            if [ ! -f "$RE_EXT_HOME/modules/$1/doctor.sh" ] || [ "$1" = core ]; then
+                re_die "no checks for a module '$1' (modules: ${ALL_MODULES[*]})."
+            fi
+            MODULES+=("$1"); shift ;;
+    esac
+done
+[ "${#MODULES[@]}" -gt 0 ] || MODULES=("${ALL_MODULES[@]}")
+
+# --- Output helpers, used by the modules' doctor.sh files --------------------
+
+if [ -t 1 ]; then
+    C_OK=$'\033[32m' C_WARN=$'\033[33m' C_FAIL=$'\033[31m' C_BOLD=$'\033[1m' C_DIM=$'\033[2m' C_OFF=$'\033[0m'
+else
+    C_OK="" C_WARN="" C_FAIL="" C_BOLD="" C_DIM="" C_OFF=""
+fi
+FAILS=0 WARNS=0
+
+doc_section() { printf '\n%s%s%s\n' "$C_BOLD" "$1" "$C_OFF"; }
+_doc_hint() { [ -z "${1:-}" ] || printf '      %s%s%s\n' "$C_DIM" "$1" "$C_OFF"; }
+# doc_ok|doc_warn|doc_fail|doc_info MESSAGE [HINT]
+doc_ok()   { printf '  %s✓%s %s\n' "$C_OK" "$C_OFF" "$1"; _doc_hint "${2:-}"; }
+doc_warn() { WARNS=$((WARNS + 1)); printf '  %s!%s %s\n' "$C_WARN" "$C_OFF" "$1"; _doc_hint "${2:-}"; }
+doc_fail() { FAILS=$((FAILS + 1)); printf '  %s✗%s %s\n' "$C_FAIL" "$C_OFF" "$1"; _doc_hint "${2:-}"; }
+doc_info() { printf '  %s-%s %s\n' "$C_DIM" "$C_OFF" "$1"; _doc_hint "${2:-}"; }
+
+# Reports whether a command is on PATH. Fails for required tools, warns for
+# optional ones. Prints nothing else, so callers can add version details.
+# Usage: doc_tool required|optional COMMAND "what needs it" ["how to get it"]
+doc_tool() {
+    local LEVEL="$1" CMD="$2" WHAT="$3" HINT="${4:-}" P
+    if P=$(command -v "$CMD" 2>/dev/null); then
+        doc_ok "$CMD ${C_DIM}$P${C_OFF}"
+        return 0
+    fi
+    if [ "$LEVEL" = required ]; then
+        doc_fail "$CMD not found, needed by $WHAT" "$HINT"
+    else
+        doc_warn "$CMD not found, needed by $WHAT" "$HINT"
+    fi
+    return 1
+}
+
+# Shortens $HOME to ~ for display
+doc_path() { case "$1" in "$HOME"/*) echo "~${1#"$HOME"}" ;; *) echo "$1" ;; esac; }
+
+# --- Checks ------------------------------------------------------------------
+
+# shellcheck source=../doctor.sh
+. "$RE_EXT_HOME/modules/core/doctor.sh"
+for MODULE in "${MODULES[@]}"; do
+    # shellcheck disable=SC1090
+    . "$RE_EXT_HOME/modules/$MODULE/doctor.sh"
+done
+
+echo
+if [ "$FAILS" -gt 0 ]; then
+    printf '%s%d problem(s)%s, %d warning(s).\n' "$C_FAIL" "$FAILS" "$C_OFF" "$WARNS"
+    exit 1
+elif [ "$WARNS" -gt 0 ]; then
+    printf '%sNo problems%s, %d warning(s) (optional tools or settings).\n' "$C_OK" "$C_OFF" "$WARNS"
+else
+    printf '%sAll good.%s\n' "$C_OK" "$C_OFF"
+fi

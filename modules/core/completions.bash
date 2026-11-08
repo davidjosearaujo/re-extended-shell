@@ -1,6 +1,6 @@
 # shellcheck shell=bash
-# Bash completion helpers shared by every completions/<topic>.bash file.
-# Loaded first by config/completions.sh.
+# Core module: bash completion helpers for every module's completions.bash
+# (loaded first), and completion for re-doctor.
 
 # Valid in bash 3.2 (macOS's /bin/bash): no mapfile or ${var,,}.
 
@@ -28,3 +28,23 @@ _re_reply_files() {
     [ -n "$nocase" ] || shopt -u nocasematch
     compopt -o filenames 2>/dev/null
 }
+
+# COMPREPLY = directories matching the current word
+_re_reply_dirs() {
+    local d
+    COMPREPLY=()
+    while IFS= read -r d; do
+        COMPREPLY+=("$d")
+    done < <(compgen -d -- "$cur")
+    compopt -o filenames 2>/dev/null
+}
+
+_re_complete_re_doctor() {
+    local cur=${COMP_WORDS[COMP_CWORD]} f modules=""
+    for f in "$RE_EXT_HOME"/modules/*/doctor.sh; do
+        f=${f%/doctor.sh}; f=${f##*/}
+        [ "$f" = core ] || modules="$modules $f"
+    done
+    _re_reply_words "$modules -h --help"
+}
+complete -F _re_complete_re_doctor re-doctor

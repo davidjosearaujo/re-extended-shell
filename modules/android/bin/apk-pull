@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Pull an installed app's APK(s) (base + splits) from a device.
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+usage() {
+    cat <<EOF
+Usage: apk-pull [-s SERIAL] [--merge] [-f] <PACKAGE>
+  Pulls every APK of an installed app (base + splits) into ./<PACKAGE>-splits/
+  -s, --serial SERIAL  Device to pull from (optional with a single device)
+  --merge              Save a single installable ./<PACKAGE>.apk instead: the
+                       base APK as-is if the app has no splits, otherwise the
+                       splits merged with xapk-merger (debug-signed)
+  -f, --force          Replace an existing output
+EOF
+}
+
+SERIAL="" MERGE="" FORCE="" PACKAGE=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -s|--serial)
+            [ "$#" -ge 2 ] || re_die "$1 needs a device serial."
+            SERIAL="$2"; shift 2 ;;
+        --merge) MERGE=1; shift ;;
+        -f|--force) FORCE=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        -*) re_die "Unknown option: $1 (see apk-pull --help)" ;;
+        *)
+            [ -z "$PACKAGE" ] || re_die "only one package at a time."
+            PACKAGE="$1"; shift ;;
+    esac
+done
+[ -n "$PACKAGE" ] || { usage >&2; exit 1; }
+
+re_require adb
+SERIAL=$(re_pick_device "apk-pull -s" "$SERIAL") || exit 1
+re_require_package "$SERIAL" "$PACKAGE"
+
+REMOTE=()
+while IFS= read -r LINE; do
+    LINE=${LINE#package:}
+    [ -n "$LINE" ] && REMOTE+=("$LINE")
+done < <(adb -s "$SERIAL" shell pm path "$PACKAGE" 2>/dev/null | tr -d '\r')
+[ "${#REMOTE[@]}" -gt 0 ] || re_die "could not list the APKs of $PACKAGE."
+
+if [ -n "$MERGE" ]; then
+    OUT="$PWD/$PACKAGE.apk"
+    if [ -e "$OUT" ] && [ -z "$FORCE" ]; then re_die "$OUT already exists (use -f to replace it)."; fi
+    DEST=$(mktemp -d)
+    trap 'rm -rf "$DEST"' EXIT
+else
+    DEST="$PWD/$PACKAGE-splits"
+    if [ -d "$DEST" ] && [ -n "$(ls -A "$DEST" 2>/dev/null)" ]; then
+        [ -n "$FORCE" ] || re_die "$DEST already exists (use -f to replace its APKs)."
+        rm -f "$DEST"/*.apk
+    fi
+    mkdir -p "$DEST" || exit 1
+fi
+
+echo "Pulling ${#REMOTE[@]} APK(s) of $PACKAGE from $SERIAL..."
+for APK in "${REMOTE[@]}"; do
+    NAME=$(basename "$APK")
+    echo "  $NAME"
+    adb -s "$SERIAL" pull "$APK" "$DEST/$NAME" >/dev/null || re_die "could not pull $APK."
+done
+
+if [ -z "$MERGE" ]; then
+    echo "Saved to $DEST/"
+    exit 0
+fi
+
+if [ "${#REMOTE[@]}" -eq 1 ]; then
+    mv -f "$DEST/$(basename "${REMOTE[0]}")" "$OUT"
+    echo "No splits, saved the base APK (original signature) to $OUT"
+else
+    echo "Merging the splits with xapk-merger..."
+    rm -f "$OUT"
+    "$RE_ANDROID_DIR/bin/xapk-merger" -o "$OUT" "$DEST" || re_die "merge failed."
+fi
