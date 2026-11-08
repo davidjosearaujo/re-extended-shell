@@ -6,6 +6,8 @@
 #
 #   env          environment variables
 #   paths        PATH entries
+#   <topic>      every other config/<topic>.sh (android, ...): that topic's
+#                environment and tools, in alphabetical order
 #   functions    shell functions that must run inside your shell (cd, export, ...)
 #   aliases      aliases
 #   completions  tab completion for the commands in bin/ (interactive shells only)
@@ -28,9 +30,23 @@ else
 fi
 export RE_EXT_HOME
 
-for _re_module in env paths functions aliases completions; do
+# A plain loop, not a function: 'declare'/'typeset' in a sourced file would
+# otherwise make its variables local to that function.
+for _re_module in env paths @topics functions aliases completions; do
     if [ "$_re_module" = completions ]; then
         case "$-" in *i*) ;; *) continue ;; esac
+    fi
+    if [ "$_re_module" = @topics ]; then
+        for _re_file in "$RE_EXT_HOME"/config/*.sh; do
+            _re_topic=${_re_file##*/}
+            _re_topic=${_re_topic%.sh}
+            case "$_re_topic" in env|paths|functions|aliases|completions) continue ;; esac
+            . "$_re_file"
+            if [ -r "$RE_EXT_HOME/local/$_re_topic.sh" ]; then
+                . "$RE_EXT_HOME/local/$_re_topic.sh"
+            fi
+        done
+        continue
     fi
     for _re_file in "$RE_EXT_HOME/config/$_re_module.sh" "$RE_EXT_HOME/local/$_re_module.sh"; do
         if [ -r "$_re_file" ]; then
@@ -38,4 +54,4 @@ for _re_module in env paths functions aliases completions; do
         fi
     done
 done
-unset _re_module _re_file
+unset _re_module _re_file _re_topic

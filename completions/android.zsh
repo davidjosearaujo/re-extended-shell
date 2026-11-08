@@ -1,10 +1,4 @@
-# Zsh tab completion for the RE Extended Shell commands.
-
-# compdef only exists once the completion system is initialised. Most setups
-# (oh-my-zsh, prezto, ...) do that before this file is sourced; if not, do it.
-if (( ! $+functions[compdef] )); then
-    autoload -Uz compinit && compinit -i
-fi
+# Zsh tab completion for the Android commands.
 
 _re_avds() {
     local -a avds
