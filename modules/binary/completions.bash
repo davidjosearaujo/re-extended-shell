@@ -1,0 +1,16 @@
+# shellcheck shell=bash
+# Binary module: bash tab completion (helpers in modules/core/completions.bash).
+
+_re_complete_bin_triage() {
+    local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
+    case "$prev" in
+        -n|--min-length|-l|--limit) COMPREPLY=(); return ;;
+    esac
+    if [[ "$cur" == -* ]]; then
+        _re_reply_words "-n --min-length -l --limit -h --help"
+    else
+        _re_reply_files ""
+    fi
+}
+
+complete -F _re_complete_bin_triage bin-triage

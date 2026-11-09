@@ -151,15 +151,9 @@ echo "Executing CA injection script..."
 re_root_shell "$SERIAL" "$ROOT" "$RE_DEVICE_DIR/inject_ca.sh $RE_DEVICE_DIR/$RE_CERT_HASH.0" \
     || re_die "CA injection failed."
 
-if [ "$MODE" = "device" ]; then
-    # 10.0.2.2 only exists inside the emulator; tunnel the device's localhost
-    # port back to ZAP on this machine over adb instead
-    echo "Forwarding device port $RE_ZAP_PORT to this machine's ZAP (adb reverse)..."
-    "${ADB[@]}" reverse "tcp:$RE_ZAP_PORT" "tcp:$RE_ZAP_PORT" >/dev/null || exit 1
-    PROXY="127.0.0.1:$RE_ZAP_PORT"
-else
-    PROXY="10.0.2.2:$RE_ZAP_PORT"
-fi
+# A physical device gets the port tunnelled back to ZAP over adb reverse
+[ "$MODE" != "device" ] || echo "Forwarding device port $RE_ZAP_PORT to this machine's ZAP (adb reverse)..."
+PROXY=$(re_zap_proxy "$SERIAL") || re_die "could not forward port $RE_ZAP_PORT to ZAP (adb reverse)."
 echo "Setting global HTTP proxy to $PROXY..."
 "${ADB[@]}" shell settings put global http_proxy "$PROXY"
 
@@ -183,7 +177,7 @@ fi
 
 if [ "$MODE" = "create" ] || [ "$MODE" = "clean" ]; then
     echo "Saving snapshot '$RE_ZAP_SNAPSHOT'..."
-    if "${ADB[@]}" emu avd snapshot save "$RE_ZAP_SNAPSHOT" 2>&1 | grep -q "OK"; then
+    if re_emu_snapshot "$SERIAL" save "$RE_ZAP_SNAPSHOT"; then
         echo "Snapshot '$RE_ZAP_SNAPSHOT' saved. Next launches will boot from it."
     else
         echo "Warning: failed to save snapshot '$RE_ZAP_SNAPSHOT'."

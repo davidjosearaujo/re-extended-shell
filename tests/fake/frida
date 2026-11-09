@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Fake frida for ./test: answers --version, and logs how it was called plus the proxy in the config script.
+echo "frida $*" >>"${FAKE_STATE:?}/log"
+if [ "${1:-}" = "--version" ]; then echo "16.0.0"; exit 0; fi
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = "-l" ] && [ "${2##*/}" = "config.js" ]; then grep '^const PROXY_' "$2" | sed 's/^/frida config: /' >>"$FAKE_STATE/log"; fi
+    shift
+done

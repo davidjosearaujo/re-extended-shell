@@ -52,6 +52,56 @@ re_boot_completed() {
     [ "$(adb -s "$1" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]
 }
 
+# Prints the host:port a device uses as its proxy to reach ZAP on this machine.
+# Emulators reach it at 10.0.2.2; anything else gets the port tunnelled back
+# over 'adb reverse' (set up here).
+# Usage: re_zap_proxy SERIAL
+re_zap_proxy() {
+    case "$1" in
+        emulator-*) echo "10.0.2.2:$RE_ZAP_PORT" ;;
+        *)
+            adb -s "$1" reverse "tcp:$RE_ZAP_PORT" "tcp:$RE_ZAP_PORT" >/dev/null || return 1
+            echo "127.0.0.1:$RE_ZAP_PORT" ;;
+    esac
+}
+
+# Clears the global HTTP proxy on SERIAL and, for a physical device, the adb
+# reverse tunnel re_zap_proxy set up.
+re_zap_proxy_off() {
+    adb -s "$1" shell settings put global http_proxy :0 || return 1
+    case "$1" in emulator-*) ;; *) adb -s "$1" reverse --remove "tcp:$RE_ZAP_PORT" >/dev/null 2>&1 ;; esac
+    return 0
+}
+
+# Prints the global HTTP proxy set on SERIAL, or nothing when there is none.
+re_device_proxy() {
+    local P
+    P=$(adb -s "$1" shell settings get global http_proxy 2>/dev/null | tr -d '\r')
+    case "$P" in ""|null|:0) ;; *) echo "$P" ;; esac
+}
+
+# Succeeds if SERIAL proxies to its own localhost (PROXY) without the adb
+# reverse tunnel that makes it reach this machine: it then has no network.
+# Usage: re_proxy_tunnel_missing SERIAL PROXY
+re_proxy_tunnel_missing() {
+    case "$1:$2" in
+        emulator-*) return 1 ;;
+        *:127.0.0.1:*|*:localhost:*) ! adb -s "$1" reverse --list 2>/dev/null | grep -q "tcp:${2##*:}" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Loads or saves snapshot NAME on the running emulator SERIAL through its
+# console. On failure, prints the emulator's reply to stderr.
+# Usage: re_emu_snapshot SERIAL load|save NAME
+re_emu_snapshot() {
+    local OUT
+    OUT=$(adb -s "$1" emu avd snapshot "$2" "$3" 2>&1 | tr -d '\r')
+    grep -q '^OK' <<<"$OUT" && return 0
+    sed 's/^/  /' <<<"$OUT" >&2
+    return 1
+}
+
 # Exits if FILE is a split-APK bundle: those have to be merged first.
 re_reject_bundle() {
     case "$1" in

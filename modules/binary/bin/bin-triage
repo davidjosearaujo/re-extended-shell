@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+# First look at a native executable or library: identity, hashes, entropy,
+# hardening, imports and interesting strings.
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+usage() {
+    cat <<EOF
+Usage: bin-triage [-n LENGTH] [-l LIMIT] <file>
+  A first look at an ELF, Mach-O or PE file (other files get the generic parts):
+    identity    file type, size, MD5, SHA-1, SHA-256
+    entropy     Shannon entropy (sampled above 16 MiB); near 8 means packed or encrypted
+    hardening   PIE, NX, RELRO, stack canary, fortify, stripped (ELF); PIE, canary,
+                signed, encrypted (Mach-O); ASLR, DEP, control-flow guard (PE)
+    libraries   what it links against
+    imports     the ones that matter: exec, network, memory, anti-debugging, ...
+    strings     URLs, IP addresses, e-mail addresses, paths, keys and
+                password-like words found in its printable strings
+  Read-only: the file is never run or changed.
+  -n, --min-length N  Shortest string to consider (default 8)
+  -l, --limit N       Most lines shown per list (default 10)
+EOF
+}
+
+MINLEN=8 LIMIT=10 FILE=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -n|--min-length) re_need_arg "$1" "$#"; MINLEN="$2"; shift 2 ;;
+        -l|--limit)      re_need_arg "$1" "$#"; LIMIT="$2"; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        -*) re_die "Unknown option: $1 (see bin-triage --help)" ;;
+        *)
+            [ -z "$FILE" ] || re_die "only one file at a time."
+            FILE="$1"; shift ;;
+    esac
+done
+[ -n "$FILE" ] || { usage >&2; exit 1; }
+case "$MINLEN$LIMIT" in ""|*[!0-9]*) re_die "-n and -l take a number." ;; esac
+[ -f "$FILE" ] || re_die "file not found: $FILE"
+case "$FILE" in -*) FILE="./$FILE" ;; esac
+re_require file strings
+
+section() { printf '\n== %s ==\n' "$1"; }
+# row LABEL VALUE
+row() { printf '  %-12s %s\n' "$1" "$2"; }
+# Reads lines on stdin; prints the first LIMIT unique ones indented, with a count of the rest
+list_lines() {
+    sort -u | awk -v limit="$LIMIT" '
+        NF { n++; if (n <= limit) print "  " substr($0, 1, 160) }
+        END { if (!n) print "  (none)"; else if (n > limit) print "  ... and " n - limit " more" }'
+}
+
+INFO=$(file -bL "$FILE")
+case "$INFO" in
+    *ELF*)    KIND=ELF ;;
+    *Mach-O*) KIND=Mach-O ;;
+    *PE32*|*"MS-DOS executable"*) KIND=PE ;;
+    *)        KIND="" ;;
+esac
+
+# --- Identity ----------------------------------------------------------------
+section "Identity"
+row File "$FILE"
+row Type "$INFO"
+row Size "$(wc -c <"$FILE" | tr -d ' ') bytes"
+for H in MD5:md5 SHA1:sha1 SHA256:sha256; do
+    row "${H%%:*}" "$(re_hash "${H#*:}" "$FILE" || echo 'no hash tool found')"
+done
+
+# --- Entropy -----------------------------------------------------------------
+section "Entropy"
+if command -v python3 >/dev/null 2>&1; then
+    # Pure Python counts about 20 MB/s, so a big file is read as 16 blocks of
+    # 1 MiB spread over it: a few seconds at most, close enough for triage
+    ENTROPY=$(python3 -I -c '
+import collections, math, os, sys
+path = sys.argv[1]
+size = os.path.getsize(path)
+block, samples = 1 << 20, 16
+sampled = size > block * samples
+offsets = [i * (size - block) // (samples - 1) for i in range(samples)] if sampled else range(0, size, block)
+counts, total = [0] * 256, 0
+with open(path, "rb") as f:
+    for offset in offsets:
+        f.seek(offset)
+        chunk = f.read(block)
+        total += len(chunk)
+        for byte, n in collections.Counter(chunk).items():
+            counts[byte] += n
+e = -sum(n / total * math.log2(n / total) for n in counts if n) if total else 0.0
+verdict = "high, likely packed or encrypted" if e >= 7.2 else "elevated, compressed data or a packer?" if e >= 6.6 else "normal"
+print("%.2f bits/byte (%s%s)" % (e, verdict, ", sampled" if sampled else ""))
+' "$FILE" 2>/dev/null)
+    row Entropy "${ENTROPY:-could not be computed}"
+else
+    row Entropy "skipped (needs python3)"
+fi
+
+# --- Format-specific parts ---------------------------------------------------
+# Interesting imports, per platform (matched as whole words)
+IMPORTS_UNIX='system|popen|execl|execle|execlp|execv|execve|execvp|fork|vfork|ptrace|dlopen|dlsym|mprotect|mmap|syscall|prctl|setuid|setgid|chroot|chmod|getenv|gets|strcpy|strcat|sprintf|vsprintf|scanf|socket|connect|bind|listen|accept|gethostbyname|getaddrinfo|inet_addr|SSL_connect|SSL_CTX_set_verify|curl_easy_perform|unlink'
+IMPORTS_WIN='CreateRemoteThread|WriteProcessMemory|ReadProcessMemory|VirtualAlloc|VirtualAllocEx|VirtualProtect|LoadLibraryA|LoadLibraryW|GetProcAddress|IsDebuggerPresent|CheckRemoteDebuggerPresent|URLDownloadToFileA|URLDownloadToFileW|InternetOpenA|InternetOpenW|InternetOpenUrlA|InternetOpenUrlW|WinExec|ShellExecuteA|ShellExecuteW|CreateProcessA|CreateProcessW|RegSetValueExA|RegSetValueExW|RegCreateKeyExA|RegCreateKeyExW|CryptEncrypt|CryptDecrypt|OpenProcess|NtUnmapViewOfSection|SetWindowsHookExA|SetWindowsHookExW|CreateServiceA|CreateServiceW|AdjustTokenPrivileges|WSAStartup|connect|send|recv'
+
+note_missing() { section "$1"; echo "  skipped ($2 not found)"; }
+
+elf_report() {
+    local ALL V IMPORTS
+    if ! command -v readelf >/dev/null 2>&1; then note_missing "ELF details" readelf; return; fi
+    # Header, program headers, dynamic section and symbols in one pass; the
+    # patterns below are specific to each part
+    ALL=$(readelf -W -h -l -d -s "$FILE" 2>/dev/null)
+
+    section "Hardening (ELF)"
+    row Machine "$(sed -n 's/^ *Machine: *//p' <<<"$ALL")"
+    case "$(sed -n 's/^ *Type: *\([A-Z]*\).*/\1/p' <<<"$ALL")" in
+        DYN)  V="yes (position independent, or a shared library)" ;;
+        EXEC) V="no (fixed load address)" ;;
+        *)    V="unknown" ;;
+    esac
+    row PIE "$V"
+    if grep -q GNU_STACK <<<"$ALL"; then
+        if grep GNU_STACK <<<"$ALL" | grep -q RWE; then V="no (executable stack)"; else V="yes"; fi
+    else
+        V="unknown (no GNU_STACK header, the stack may be executable)"
+    fi
+    row NX "$V"
+    if ! grep -q GNU_RELRO <<<"$ALL"; then V=no
+    elif grep -qE '\(BIND_NOW\)|\(FLAGS(_1)?\).*NOW' <<<"$ALL"; then V=full
+    else V="partial"; fi
+    row RELRO "$V"
+    if grep -q '__stack_chk_fail' <<<"$ALL"; then V=yes; else V=no; fi
+    row Canary "$V"
+    if grep -qE ' __[a-z_0-9]+_chk(@|$| )' <<<"$ALL"; then V=yes; else V=no; fi
+    row Fortify "$V"
+    case "$INFO" in *"not stripped"*) V="no (symbols present)" ;; *stripped*) V=yes ;; *) V=unknown ;; esac
+    row Stripped "$V"
+    case "$INFO" in *"statically linked"*) row Linking "static" ;; *) row Linking "dynamic" ;; esac
+
+    section "Libraries"
+    sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' <<<"$ALL" | list_lines
+    # Imports: undefined symbols, minus their @version suffix
+    IMPORTS=$(awk '$7 == "UND" && $8 != "" { sub(/@.*/, "", $8); print $8 }' <<<"$ALL")
+    section "Notable imports"
+    grep -xE "$IMPORTS_UNIX" <<<"$IMPORTS" | list_lines
+}
+
+macho_report() {
+    local HDR LOADS UNDEF V
+    if ! command -v otool >/dev/null 2>&1; then note_missing "Mach-O details" otool; return; fi
+    HDR=$(otool -hv "$FILE" 2>/dev/null)
+    LOADS=$(otool -l "$FILE" 2>/dev/null)
+    # Imported symbols, without the leading underscores Mach-O adds
+    UNDEF=$(nm -u "$FILE" 2>/dev/null | sed 's/^ *_*//')
+    section "Hardening (Mach-O)"
+    if grep -qw PIE <<<"$ALL"; then V=yes; else V=no; fi
+    row PIE "$V"
+    if grep -qx 'stack_chk_fail' <<<"$UNDEF"; then V=yes; else V=no; fi
+    row Canary "$V"
+    if grep -q LC_CODE_SIGNATURE <<<"$LOADS"; then V=yes; else V=no; fi
+    row Signed "$V"
+    if grep -A4 LC_ENCRYPTION_INFO <<<"$LOADS" | grep -q 'cryptid 1'; then V="yes (encrypted, decrypt it before analysis)"; else V=no; fi
+    row Encrypted "$V"
+    section "Libraries"
+    otool -L "$FILE" 2>/dev/null | tail -n +2 | awk '{ print $1 }' | list_lines
+    section "Notable imports"
+    grep -xE "$IMPORTS_UNIX" <<<"$UNDEF" | list_lines
+}
+
+pe_report() {
+    local DUMP HEX CHARS V
+    if ! command -v objdump >/dev/null 2>&1; then note_missing "PE details" objdump; return; fi
+    DUMP=$(objdump -p "$FILE" 2>/dev/null)
+    section "Hardening (PE)"
+    HEX=$(awk '$1 == "DllCharacteristics" { print $2; exit }' <<<"$DUMP")
+    if [ -n "$HEX" ]; then
+        CHARS=$((16#$HEX))
+        for FLAG in "ASLR:64" "DEP:256" "ControlFlow:16384"; do
+            if [ $((CHARS & ${FLAG#*:})) -ne 0 ]; then V=yes; else V=no; fi
+            row "${FLAG%%:*}" "$V"
+        done
+    else
+        row Flags "not found in the PE header"
+    fi
+    section "Libraries"
+    sed -n 's/^[[:space:]]*DLL Name: //p' <<<"$DUMP" | list_lines
+    section "Notable imports"
+    grep -owE "$IMPORTS_WIN" <<<"$DUMP" | list_lines
+}
+
+case "$KIND" in
+    ELF) elf_report ;;
+    Mach-O) macho_report ;;
+    PE) pe_report ;;
+    *) section "Format"; echo "  Not an ELF, Mach-O or PE file: only the generic parts apply." ;;
+esac
+
+# --- Strings -----------------------------------------------------------------
+STR=$(strings -a -n "$MINLEN" "$FILE" 2>/dev/null)
+section "Strings (at least $MINLEN characters)"
+row Count "$(grep -c . <<<"$STR")"
+echo " URLs"
+grep -Eo "https?://[A-Za-z0-9._~:/?#@!\$&()*+,;=%-]+" <<<"$STR" | list_lines
+echo " IP addresses"
+grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' <<<"$STR" | awk -F. '$1 <= 255 && $2 <= 255 && $3 <= 255 && $4 <= 255' | list_lines
+echo " E-mail addresses"
+grep -Eo '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' <<<"$STR" | list_lines
+echo " Paths and registry keys"
+grep -Eo '(/etc|/bin|/usr|/tmp|/var|/proc|/dev|/sys)/[A-Za-z0-9._/-]+|HKEY_[A-Z_]+\\[^ ]*' <<<"$STR" | list_lines
+echo " Keys and credentials"
+{
+    grep -E -- '-----BEGIN [A-Z ]*(PRIVATE KEY|CERTIFICATE)-----|AKIA[0-9A-Z]{16}' <<<"$STR"
+    grep -Ei 'passw(or)?d|secret|token|api[_-]?key|credential' <<<"$STR"
+} | list_lines

@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Runs the tests in tests/ (and shellcheck, when installed).
+# Usage: ./test [-v] [NAME]    NAME filters the test files, e.g. ./test reset
+# No device, emulator or network is needed: tests/fake/ stands in for adb, the
+# emulator, frida and scrcpy. Nothing outside a temporary directory is touched.
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+
+VERBOSE="" FILTER=""
+for ARG in "$@"; do
+    case "$ARG" in
+        -v|--verbose) VERBOSE=1 ;;
+        -h|--help) sed -n '2,5p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) FILTER="$ARG" ;;
+    esac
+done
+
+PASS=0 FAIL=0
+for FILE in "$ROOT"/tests/t_*.sh; do
+    NAME=$(basename -- "$FILE" .sh); NAME=${NAME#t_}
+    case "$NAME" in *"$FILTER"*) ;; *) continue ;; esac
+    OUT=$(bash "$FILE" 2>&1)
+    RC=$?
+    P=$(grep -c '^ok ' <<<"$OUT")
+    F=$(grep -c '^not ok ' <<<"$OUT")
+    PASS=$((PASS + P)); FAIL=$((FAIL + F))
+    if [ "$RC" -ne 0 ] || [ "$F" -gt 0 ] || ! grep -q '^# done' <<<"$OUT"; then
+        # A file that stops early (error, hang, bad syntax) counts as a failure
+        if [ "$F" -eq 0 ]; then FAIL=$((FAIL + 1)); fi
+        printf 'FAIL %-22s %d passed, %d failed\n' "$NAME" "$P" "$F"
+        grep -v '^ok \|^# done' <<<"$OUT" | sed 's/^/    /'
+    else
+        printf 'ok   %-22s %d passed\n' "$NAME" "$P"
+        [ -z "$VERBOSE" ] || grep '^ok ' <<<"$OUT" | sed 's/^/    /'
+    fi
+done
+
+if [ -z "$FILTER" ]; then
+    if command -v shellcheck >/dev/null 2>&1; then
+        FILES=$(cd "$ROOT" && ls install uninstall test re_extended_shell_main lib/*.sh modules/*/*.sh modules/*/bin/* modules/*/device/*.sh tests/*.sh tests/fake/* 2>/dev/null)
+        # shellcheck disable=SC2086
+        if (cd "$ROOT" && shellcheck -x $FILES); then echo "ok   shellcheck"; else FAIL=$((FAIL + 1)); echo "FAIL shellcheck"; fi
+    else
+        echo "--   shellcheck not installed, skipped"
+    fi
+fi
+
+echo
+echo "$PASS passed, $FAIL failed"
+[ "$FAIL" -eq 0 ]

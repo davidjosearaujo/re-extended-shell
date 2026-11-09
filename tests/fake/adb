@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Fake adb for ./test. Devices come from $FAKE_STATE/devices (lines
+# SERIAL|AVD_NAME|STATE); every call is logged to $FAKE_STATE/log; state such as
+# the proxy setting and reverse tunnels lives in files next to them.
+S="${FAKE_STATE:?FAKE_STATE not set}"
+echo "adb $*" >>"$S/log"
+SER=""
+if [ "${1:-}" = "-s" ]; then SER="$2"; shift 2; fi
+
+field() { awk -F'|' -v s="$SER" -v n="$1" '$1 == s { print $n; exit }' "$S/devices"; }
+
+case "${1:-}" in
+    devices)
+        echo "List of devices attached"
+        awk -F'|' 'NF { printf "%s\t%s\n", $1, $3 }' "$S/devices" ;;
+    get-state)
+        STATE=$(field 3)
+        [ -n "$STATE" ] || { echo "error: device '$SER' not found" >&2; exit 1; }
+        echo "$STATE" ;;
+    root) echo "restarting adbd as root" ;;
+    wait-for-device|connect|start-server|push|pull|install-multiple|reboot) ;;
+    reverse)
+        shift
+        case "${1:-}" in
+            --list) cat "$S/reverse.$SER" 2>/dev/null ;;
+            --remove)
+                grep -vF -- "$2" "$S/reverse.$SER" >"$S/reverse.$SER.new" 2>/dev/null
+                mv -f "$S/reverse.$SER.new" "$S/reverse.$SER" 2>/dev/null ;;
+            *) echo "(reverse) $1 $2" >>"$S/reverse.$SER" ;;
+        esac ;;
+    emu)
+        shift
+        AVD=$(field 2)
+        case "$1 $2 $3" in
+            "avd name "*) echo "$AVD"; printf 'OK\r\n' ;;
+            "avd snapshot load")
+                if [ -d "${ANDROID_AVD_HOME:?}/$AVD.avd/snapshots/$4" ]; then printf 'OK\r\n'
+                else printf "KO: No snapshot named '%s' found\r\n" "$4"; fi ;;
+            "avd snapshot save")
+                mkdir -p "${ANDROID_AVD_HOME:?}/$AVD.avd/snapshots/$4"; printf 'OK\r\n' ;;
+            "kill  ")
+                grep -v "^$SER|" "$S/devices" >"$S/devices.new"; mv -f "$S/devices.new" "$S/devices"
+                printf 'OK: killing emulator, bye bye\r\n' ;;
+        esac ;;
+    shell)
+        shift
+        CMD="$*"
+        case "$CMD" in
+            "getprop sys.boot_completed") printf '1\r\n' ;;
+            "getprop ro.product.model") printf 'FakePhone\r\n' ;;
+            "getprop ro.product.cpu.abi") printf 'x86_64\r\n' ;;
+            "id -u") printf '0\r\n' ;;
+            "settings get global http_proxy") if [ -f "$S/proxy.$SER" ]; then cat "$S/proxy.$SER"; else echo null; fi ;;
+            "settings put global http_proxy "*) echo "${CMD##* }" >"$S/proxy.$SER" ;;
+            "pm path "*) printf 'package:/data/app/fake/base.apk\r\n' ;;
+            # frida-server: pushed (with its version file), started, found by pidof, killed
+            *"frida-server.version'"*"echo "*) echo "$CMD" | sed 's/.*echo \([^ ]*\) >.*/\1/' >"$S/frida-version.$SER" ;;
+            *"frida-server.version"*"cat "*) cat "$S/frida-version.$SER" 2>/dev/null ;;
+            *"frida-server -D"*) echo 4242 >"$S/frida-pid.$SER" ;;
+            "pidof frida-server") cat "$S/frida-pid.$SER" 2>/dev/null ;;
+            "kill "*) rm -f "$S/frida-pid.$SER" ;;
+        esac ;;
+esac
+exit 0

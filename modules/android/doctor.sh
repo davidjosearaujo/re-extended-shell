@@ -170,16 +170,10 @@ else
             ""|null|:0) doc_info "No global HTTP proxy" ;;
             *)
                 doc_info "Global HTTP proxy: $PROXY"
-                case "$SERIAL:$PROXY" in
-                    emulator-*) ;;
-                    *:127.0.0.1:*|*:localhost:*)
-                        PPORT=${PROXY##*:}
-                        if ! adb -s "$SERIAL" reverse --list 2>/dev/null | grep -q "tcp:$PPORT"; then
-                            doc_warn "$SERIAL proxies to $PROXY but has no adb reverse tunnel, so it has no network" \
-                                "Run 'launch-emulator -d $SERIAL' to set it up again, or 'release-device $SERIAL'."
-                        fi
-                        ;;
-                esac
+                if re_proxy_tunnel_missing "$SERIAL" "$PROXY"; then
+                    doc_warn "$SERIAL proxies to $PROXY but has no adb reverse tunnel, so it has no network" \
+                        "Run 'device-proxy on $SERIAL' to restore it, or 'device-proxy off $SERIAL'."
+                fi
                 ;;
         esac
         if [ -n "$FRIDA_PID" ]; then

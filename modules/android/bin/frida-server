@@ -191,14 +191,8 @@ re_prepare_cert "$WORK_DIR"
 
 # Same proxy as launch-emulator: the emulator reaches this machine at 10.0.2.2;
 # anything else gets the port tunnelled back over adb
-case "$SERIAL" in
-    emulator-*) PROXY_HOST="10.0.2.2" ;;
-    *)
-        PROXY_HOST="127.0.0.1"
-        adb -s "$SERIAL" reverse "tcp:$RE_ZAP_PORT" "tcp:$RE_ZAP_PORT" >/dev/null \
-            || re_die "could not forward the device's port $RE_ZAP_PORT to ZAP (adb reverse)."
-        ;;
-esac
+PROXY_HOST=$(re_zap_proxy "$SERIAL") || re_die "could not forward the device's port $RE_ZAP_PORT to ZAP (adb reverse)."
+PROXY_HOST=${PROXY_HOST%:*}
 re_port_listening "$RE_ZAP_PORT" || echo "Warning: nothing listens on port $RE_ZAP_PORT, is ZAP running?"
 
 # config.js with the ZAP CA and proxy filled in

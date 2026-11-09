@@ -61,11 +61,26 @@ _re_complete_kill_emulator() {
 }
 
 _re_complete_reset_emulator() {
-    local cur=${COMP_WORDS[COMP_CWORD]}
+    local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
+    [ "$prev" = "--snapshot" ] && { COMPREPLY=(); return; }
     if [[ "$cur" == -* ]]; then
-        _re_reply_words "-h --help"
+        _re_reply_words "--save --snapshot -h --help"
     else
         _re_reply_words "$(_re_serials) $(_re_avds)"
+    fi
+}
+
+_re_complete_device_proxy() {
+    local cur=${COMP_WORDS[COMP_CWORD]} i seen=""
+    for ((i = 1; i < COMP_CWORD; i++)); do
+        case "${COMP_WORDS[i]}" in on|off|status) seen=1 ;; esac
+    done
+    if [[ "$cur" == -* ]]; then
+        _re_reply_words "-h --help"
+    elif [ -z "$seen" ]; then
+        _re_reply_words "on off status"
+    else
+        _re_reply_words "$(_re_serials)"
     fi
 }
 
@@ -186,6 +201,7 @@ _re_complete_applog() {
 complete -F _re_complete_launch_emulator launch-emulator
 complete -F _re_complete_kill_emulator kill-emulator
 complete -F _re_complete_reset_emulator reset-emulator
+complete -F _re_complete_device_proxy device-proxy
 complete -F _re_complete_release_device release-device
 complete -F _re_complete_wireshark launch-emulator-wireshark
 complete -F _re_complete_xapk_installer xapk-installer

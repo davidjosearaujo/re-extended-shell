@@ -14,6 +14,7 @@ git-ignored `local/` folder, so updates never conflict with them.
 - [Android](#android): emulators and rooted phones with ZAP's CA injected as a system
   CA (Android 14+ included), Frida with SSL unpinning, pulling, decompiling and
   patching APKs, split APK/XAPK handling, per-app logs and live traffic capture.
+- [Binary](#binary): a first look at native executables and libraries (ELF, Mach-O, PE).
 - [Core](#core): what every module shares, and `re-doctor`, which checks your setup.
 
 More modules will follow. See [Adding a module](#adding-a-module).
@@ -139,6 +140,8 @@ Settings shared by every module (set them in `local/env.sh`, see [Configuration]
 | `release-device [--reboot] [SERIAL]` | Undoes `launch-emulator -d`: clears the proxy, removes the tunnel, stops frida-server, deletes the pushed files and closes scrcpy. Run it before unplugging the phone, or its network stops working. |
 | `kill-emulator [-f] <AVD>` | Shuts an emulator down cleanly by AVD name, killing it only if it won't exit. |
 | `reset-emulator [SERIAL\|AVD]` | Puts a running emulator back to its `zap-ready` snapshot without restarting it (a few seconds), dropping everything since: installed apps, app data, proxy changes. With one emulator running it's picked automatically; with several, name it by serial or AVD name. |
+| `reset-emulator --save [SERIAL\|AVD]` | Saves the emulator's current state as the snapshot instead, so you can set up the app under test once and come back to it. `--snapshot NAME` (on either form) uses another snapshot, so you can keep several states. `--save` alone replaces the `zap-ready` one that `launch-emulator` boots from. |
+| `device-proxy on\|off\|status [SERIAL]` | Turns the ZAP proxy on or off on a running emulator or device without restarting it (for a physical device, the `adb reverse` tunnel too). `release-device` does the same and more when you unplug a phone. |
 | `frida-server [-s SERIAL]` | Downloads the frida-server build that matches your `frida --version` and the device's CPU, pushes it and starts it as root. Does nothing if that version already runs. `--push-only` stops after the push, `--stop` kills it, `--refresh` downloads again. |
 | `frida-server --ssl-unpinning <PKG>` | Then spawns the app under Frida with [HTTP Toolkit's unpinning scripts](https://github.com/httptoolkit/frida-interception-and-unpinning): it trusts the ZAP CA despite certificate pinning, and is forced through the same proxy `launch-emulator` sets. `-l script.js` loads your own scripts too. |
 | `apk-pull [-s SERIAL] <PKG>` | Pulls every APK of an installed app (base + splits) into `./<PKG>-splits/`. With `--merge`, saves a single installable `./<PKG>.apk` instead (merged with `xapk-merger` when the app has splits). |
@@ -255,6 +258,22 @@ frida-server builds and the unpinning scripts are cached in
   this is what you want. On a phone, run `release-device` when you're done.
 - `apk-patch` and `xapk-merger` re-sign the app with a different key, so uninstall the
   original before installing their output. Apps that check their own signature notice.
+
+## Binary
+
+Native executables and libraries on Linux, macOS and Windows, with no device involved.
+
+### Commands
+
+| Command | What it does |
+| --- | --- |
+| `bin-triage <file>` | A first look at an ELF, Mach-O or PE file, in one report: file type, size and hashes (MD5, SHA-1, SHA-256); whole-file entropy, which flags packed or encrypted files; hardening (PIE, NX, RELRO, stack canary, fortify and stripped for ELF; PIE, canary, signed and encrypted for Mach-O; ASLR, DEP and control-flow guard for PE); the libraries it links; the imports that matter (exec, network, memory, anti-debugging); and the URLs, IP addresses, e-mail addresses, paths, keys and password-like strings in its text. `-n` sets the shortest string, `-l` how many lines each list shows. Other files get the generic parts. It only reads the file, it never runs it. |
+
+### Requirements
+
+- `file` and `strings` (binutils; on macOS the Xcode command line tools).
+- For the format details: `readelf` for ELF, `objdump` for PE (both from binutils), `otool` and `nm` for Mach-O.
+- `python3` for the entropy figure. Anything missing is skipped and named in the report, and `re-doctor` lists it.
 
 ## Layout and customisation
 

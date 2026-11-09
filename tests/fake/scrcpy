@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Fake scrcpy for ./test: only logs.
+echo "scrcpy $*" >>"${FAKE_STATE:?}/log"
