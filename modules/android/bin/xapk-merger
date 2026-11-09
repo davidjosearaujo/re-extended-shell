@@ -68,11 +68,11 @@ download_apkeditor() {
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
     case $1 in
-        -o|--output)   OUTPUT_APK="$2"; shift 2 ;;
-        -k|--keystore) KEYSTORE="$2"; shift 2 ;;
-        -p|--ks-pass)  KS_PASS="$2"; shift 2 ;;
-        -a|--alias)    KS_ALIAS="$2"; shift 2 ;;
-        -j|--jar)      APKEDITOR_JAR="$2"; shift 2 ;;
+        -o|--output)   re_need_arg "$1" "$#"; OUTPUT_APK="$2"; shift 2 ;;
+        -k|--keystore) re_need_arg "$1" "$#"; KEYSTORE="$2"; shift 2 ;;
+        -p|--ks-pass)  re_need_arg "$1" "$#"; KS_PASS="$2"; shift 2 ;;
+        -a|--alias)    re_need_arg "$1" "$#"; KS_ALIAS="$2"; shift 2 ;;
+        -j|--jar)      re_need_arg "$1" "$#"; APKEDITOR_JAR="$2"; shift 2 ;;
         --no-obb)      KEEP_OBB=0; shift ;;
         --provision)   PROVISION=1; shift ;;
         -h|--help)     usage; exit 0 ;;

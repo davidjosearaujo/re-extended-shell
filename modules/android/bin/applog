@@ -24,9 +24,7 @@ EOF
 SERIAL="" START="" PACKAGE="" LOGCAT_ARGS=()
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        -s|--serial)
-            [ "$#" -ge 2 ] || re_die "$1 needs a device serial."
-            SERIAL="$2"; shift 2 ;;
+        -s|--serial) re_need_arg "$1" "$#"; SERIAL="$2"; shift 2 ;;
         --start) START=1; shift ;;
         -h|--help) usage; exit 0 ;;
         --) shift; LOGCAT_ARGS+=("$@"); break ;;

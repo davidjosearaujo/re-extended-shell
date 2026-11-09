@@ -15,8 +15,7 @@
 # paths.sh, and so on. 'core' always comes first, the others alphabetically.
 # Your own files in local/ (git-ignored) load around them:
 #
-#   env          modules/core/env.sh, local/env.sh, then for each module
-#                local/<module>.sh followed by modules/<module>/env.sh
+#   env          modules/core/env.sh, local/env.sh, then modules/*/env.sh
 #   paths        modules/*/paths.sh + modules/*/bin, then local/paths.sh
 #   functions    modules/*/functions.sh, then local/functions.sh
 #   aliases      modules/*/aliases.sh, then local/aliases.sh
@@ -38,25 +37,21 @@ else
 fi
 export RE_EXT_HOME
 
-# Module names, core first. Only prints: the sourcing below happens in plain
-# loops, because 'declare'/'typeset' in a file sourced from a function would
-# make its variables local to that function.
-_re_modules() {
-    local _d _m
-    echo core
-    for _d in "$RE_EXT_HOME"/modules/*/; do
-        _m=${_d%/}
-        _m=${_m##*/}
-        if [ "$_m" != core ]; then echo "$_m"; fi
-    done
-}
+# Module names, core first, then the others alphabetically. An array built here
+# (no subshells: this runs at every shell start). The sourcing below happens in
+# plain loops, because 'declare'/'typeset' in a file sourced from a function
+# would make its variables local to that function.
+_re_modules=(core)
+for _re_dir in "$RE_EXT_HOME"/modules/*/; do
+    _re_dir=${_re_dir%/}
+    if [ "${_re_dir##*/}" != core ]; then _re_modules+=("${_re_dir##*/}"); fi
+done
 
-# env: core, then yours, then each module after its own local/<module>.sh
+# env: core, then yours, then the other modules (so local/env.sh can set what they read)
 if [ -r "$RE_EXT_HOME/modules/core/env.sh" ]; then . "$RE_EXT_HOME/modules/core/env.sh"; fi
 if [ -r "$RE_EXT_HOME/local/env.sh" ]; then . "$RE_EXT_HOME/local/env.sh"; fi
-for _re_module in $(_re_modules); do
+for _re_module in "${_re_modules[@]}"; do
     [ "$_re_module" = core ] && continue
-    if [ -r "$RE_EXT_HOME/local/$_re_module.sh" ]; then . "$RE_EXT_HOME/local/$_re_module.sh"; fi
     if [ -r "$RE_EXT_HOME/modules/$_re_module/env.sh" ]; then . "$RE_EXT_HOME/modules/$_re_module/env.sh"; fi
 done
 
@@ -65,7 +60,7 @@ for _re_kind in paths functions aliases completions; do
     if [ "$_re_kind" = completions ]; then
         case "$-" in *i*) ;; *) continue ;; esac
     fi
-    for _re_module in $(_re_modules); do
+    for _re_module in "${_re_modules[@]}"; do
         _re_dir="$RE_EXT_HOME/modules/$_re_module"
         if [ "$_re_kind" = completions ]; then
             _re_file="$_re_dir/completions.$_re_shell"
@@ -79,5 +74,4 @@ for _re_kind in paths functions aliases completions; do
     if [ "$_re_kind" = paths ]; then export PATH; fi
 done
 
-unset _re_shell _re_module _re_kind _re_dir _re_file
-unset -f _re_modules
+unset _re_shell _re_modules _re_module _re_kind _re_dir _re_file

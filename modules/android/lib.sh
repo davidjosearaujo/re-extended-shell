@@ -8,7 +8,7 @@
 # shellcheck disable=SC2034  # used by the scripts that source this file
 RE_ANDROID_DIR="$RE_EXT_HOME/modules/android"
 
-# Settings: export any of these (e.g. in local/android.sh) to override.
+# Settings: export any of these (e.g. in local/env.sh) to override.
 RE_ZAP_SNAPSHOT="${RE_ZAP_SNAPSHOT:-zap-ready}"
 # shellcheck disable=SC2034  # used by the scripts that source this file
 RE_DEVICE_DIR="/data/local/tmp/re-ext"   # where files get pushed on the device
@@ -24,6 +24,15 @@ re_adb_devices() {
     fi
 }
 
+# Prints the directory of the AVD called NAME (honours a custom path= in its
+# .ini). Fails if there is no such AVD.
+re_avd_dir() {
+    local AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}" DIR
+    [ -f "$AVD_HOME/$1.ini" ] || return 1
+    DIR=$(sed -n 's/^path=//p' "$AVD_HOME/$1.ini" 2>/dev/null)
+    echo "${DIR:-$AVD_HOME/$1.avd}"
+}
+
 # Prints "SERIAL AVD_NAME" for every running emulator adb knows about.
 re_running_emulators() {
     local S NAME
@@ -31,6 +40,16 @@ re_running_emulators() {
         NAME=$(adb -s "$S" emu avd name 2>/dev/null | head -n 1 | tr -d '\r')
         echo "$S ${NAME:-?}"
     done
+}
+
+# Prints the serial of the running emulator for the AVD called NAME.
+re_emulator_serial() {
+    re_running_emulators | awk -v n="$1" '$2 == n { print $1; exit }'
+}
+
+# Succeeds once the device SERIAL has finished booting.
+re_boot_completed() {
+    [ "$(adb -s "$1" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]
 }
 
 # Exits if FILE is a split-APK bundle: those have to be merged first.

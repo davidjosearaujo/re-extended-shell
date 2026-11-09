@@ -42,10 +42,10 @@ The installer adds one line to `~/.bashrc` and/or `~/.zshrc`, under an
 `# Installed by RE Extended Shell` comment, that sources `re_extended_shell_main`.
 On macOS, if `~/.bash_profile` doesn't load `~/.bashrc`, the line goes there too; if
 there's no `~/.bash_profile` at all, it creates the usual one that loads `~/.profile` and `~/.bashrc`.
-It also fills `local/` with commented templates for your settings, without touching
-files that are already there.
+It also fills `local/` with commented templates for your settings (see
+[Configuration](#configuration)), without touching files that are already there.
 Running it again is safe: it updates that line in place, for example after you move
-the repo, and adds the templates of any new module.
+the repo.
 
 `./uninstall` removes the hook and lists what the commands created outside the repo.
 `./uninstall --purge` also deletes those (downloads, caches, the `zap-ready` snapshots
@@ -59,13 +59,68 @@ converts it to whatever format its targets expect.
 
 Finally, run `re-doctor` to check that everything is in place.
 
+## Configuration
+
+Everything works without any configuration. When you want to change something, use
+the `local/` folder in the repo. It is git-ignored, so `git pull` never touches it.
+
+**The one rule: don't edit files in `modules/`. Put your changes in `local/`.** Files
+in `modules/` are the tool's code and get replaced by updates; a change there will
+conflict the next time you pull.
+
+### Change a setting (environment variables)
+
+1. Open `local/env.sh`. `./install` created it for you from
+   [local.example/env.sh](local.example/env.sh), which lists every setting as a
+   commented example (ZAP port and certificate, `JAVA_HOME`, the Android SDK, jadx,
+   and so on).
+2. Remove the `#` in front of the line you want and set your value. Keep the
+   `export`, because the commands run as separate scripts and only see exported
+   variables:
+
+   ```sh
+   export ANDROID_HOME="$HOME/sdk/android"
+   export RE_ZAP_PORT=8080
+   ```
+
+3. Open a new terminal (or run `source ~/.bashrc` / `source ~/.zshrc`). The file is read
+   when the shell starts.
+4. Run `re-doctor` to check it.
+
+Each setting, with its default, is listed in the section of the module that uses it
+([Core](#core), [Android](#android)). `local/env.sh` loads before the modules, so
+what you set there is what they see.
+
+### Add your own PATH entries, aliases, functions or completions
+
+The installer creates one file for each, with commented examples:
+
+| File | Put in it |
+| --- | --- |
+| `local/paths.sh` | extra PATH entries, e.g. `re_path_append "$HOME/tools/bin"` |
+| `local/aliases.sh` | your aliases |
+| `local/functions.sh` | shell functions that must run inside your shell |
+| `local/completions.sh` | tab completion (interactive shells only) |
+
+These files are sourced by both bash and zsh, so keep them portable or check
+`$BASH_VERSION` / `$ZSH_VERSION`.
+
+### After `git pull`
+
+You don't need to re-run `./install`. The installer only adds the hook to your rc file
+and creates the `local/` files that are missing; it never changes one that exists.
+That also means a new setting added by an update does not appear in your `local/env.sh`.
+To see what's new, look at [local.example/env.sh](local.example/env.sh) or the settings
+table in the module's section, and copy what you want. To start over from the
+template, delete your `local/env.sh` and run `./install`.
+
 ## Core
 
 | Command | What it does |
 | --- | --- |
 | `re-doctor [MODULE...]` | Checks the shell hook and PATH, the ZAP certificate (format, expiry) and whether ZAP is listening, then each module's tools, emulators and connected devices, and says how to fix what's missing. Read-only. Exits non-zero if something required is missing. |
 
-Settings shared by every module (put them in `local/env.sh`):
+Settings shared by every module (set them in `local/env.sh`, see [Configuration](#configuration)):
 
 | Variable | Default |
 | --- | --- |
@@ -83,6 +138,7 @@ Settings shared by every module (put them in `local/env.sh`):
 | `launch-emulator -d [SERIAL]` | Same setup on a rooted physical device (userdebug build, or `su` via Magisk/KernelSU). Routes the proxy through `adb reverse`, opens [scrcpy](https://github.com/Genymobile/scrcpy) and pushes frida-server the same way. |
 | `release-device [--reboot] [SERIAL]` | Undoes `launch-emulator -d`: clears the proxy, removes the tunnel, stops frida-server, deletes the pushed files and closes scrcpy. Run it before unplugging the phone, or its network stops working. |
 | `kill-emulator [-f] <AVD>` | Shuts an emulator down cleanly by AVD name, killing it only if it won't exit. |
+| `reset-emulator [SERIAL\|AVD]` | Puts a running emulator back to its `zap-ready` snapshot without restarting it (a few seconds), dropping everything since: installed apps, app data, proxy changes. With one emulator running it's picked automatically; with several, name it by serial or AVD name. |
 | `frida-server [-s SERIAL]` | Downloads the frida-server build that matches your `frida --version` and the device's CPU, pushes it and starts it as root. Does nothing if that version already runs. `--push-only` stops after the push, `--stop` kills it, `--refresh` downloads again. |
 | `frida-server --ssl-unpinning <PKG>` | Then spawns the app under Frida with [HTTP Toolkit's unpinning scripts](https://github.com/httptoolkit/frida-interception-and-unpinning): it trusts the ZAP CA despite certificate pinning, and is forced through the same proxy `launch-emulator` sets. `-l script.js` loads your own scripts too. |
 | `apk-pull [-s SERIAL] <PKG>` | Pulls every APK of an installed app (base + splits) into `./<PKG>-splits/`. With `--merge`, saves a single installable `./<PKG>.apk` instead (merged with `xapk-merger` when the app has splits). |
@@ -110,7 +166,7 @@ apk-pull --merge com.example.app && apk-decompile com.example.app.apk
 ### Requirements
 
 - Android SDK platform-tools and emulator, `openssl`. The SDK is found in the default
-  Android Studio location; set `ANDROID_HOME` in `local/android.sh` if yours is elsewhere.
+  Android Studio location; set `ANDROID_HOME` in `local/env.sh` if yours is elsewhere.
 - For emulators: a **Google APIs** system image. Google Play images don't allow `adb root`.
 - Optional, per command:
   - `frida-server`: [frida-tools](https://frida.re) (`pipx install frida-tools`), plus
@@ -173,7 +229,7 @@ declared in the app's network security config, not pinning in code.
 
 ### Settings
 
-Put these in `local/android.sh`:
+Put these in `local/env.sh`:
 
 | Variable | Default |
 | --- | --- |
@@ -220,7 +276,6 @@ modules/
     completions.zsh
     doctor.sh             re-doctor checks
     purge.sh              what ./uninstall --purge deletes
-    local.example.sh      template for local/<module>.sh
     device/               (android) files that run on the device
 local/                  YOUR files (git-ignored), see below
 local.example/          templates for local/ (the installer copies them)
@@ -231,24 +286,23 @@ certs/                  your ZAP root CA (git-ignored)
 The modules load one kind of file at a time, `core` first and the others
 alphabetically, with your `local/` files in between:
 
-1. **env**: `modules/core/env.sh`, `local/env.sh`, then for each module
-   `local/<module>.sh` followed by `modules/<module>/env.sh`
+1. **env**: `modules/core/env.sh`, `local/env.sh`, then each module's `env.sh`
 2. **paths**: each module's `paths.sh` and `bin/`, then `local/paths.sh`
 3. **functions**: each module's `functions.sh`, then `local/functions.sh`
 4. **aliases**: each module's `aliases.sh`, then `local/aliases.sh`
 5. **completions**: each module's `completions.bash`/`.zsh`, then `local/completions.sh`
 
-So a module's settings go in `local/<module>.sh` (`local/android.sh`), where they're
-set before the module reads them, and everything personal (extra PATH entries, your own
-aliases, shell functions) goes in the matching `local/` file. `git pull` never
-conflicts with any of it. Files in `modules/` and `local/` are sourced by both bash and
-zsh, so keep them portable or check `$BASH_VERSION` / `$ZSH_VERSION`. The commands in
-`bin/` are separate bash scripts, so they behave the same whichever shell you use.
+Your files go in `local/`, never in `modules/` (see [Configuration](#configuration)).
+Files in `modules/` and `local/` are sourced by both bash and zsh, so keep them
+portable or check `$BASH_VERSION` / `$ZSH_VERSION`. The commands in `bin/` are
+separate bash scripts, so they behave the same whichever shell you use.
 
 If you change the code, keep it working on both systems: bash 3.2 (no `mapfile`,
 `declare -A` or `${var,,}`) and BSD tools as well as GNU ones (no `readlink -f`,
 `sed -i`, `grep -P`, `ss` or `/proc` without a fallback). `modules/core/lib.sh` has
 helpers for the OS-specific parts, e.g. `re_port_listening` and `re_proc_has_arg`.
+In a command's option parser, call `re_need_arg "$1" "$#"` before reading `$2`, so a
+missing value is an error instead of an endless loop.
 
 ## Adding a module
 
@@ -259,12 +313,11 @@ optional. For a module called `ios`:
 | --- | --- |
 | `bin/<command>` | Each command, a bash script that sources `../lib.sh`. Copy the first lines of an existing command to get the self-locating `source` line. |
 | `lib.sh` | Helpers and settings defaults for the module's commands. Sources `../core/lib.sh` first. Put downloads and caches under `$RE_DATA_DIR/ios/`. |
-| `env.sh`, `paths.sh` | Environment and PATH for your interactive shell: SDK detection, `re_path_append` for its tools, and a comment listing its settings. |
+| `env.sh`, `paths.sh` | Environment and PATH for your interactive shell: SDK detection and `re_path_append` for its tools. Not for user settings. |
 | `functions.sh`, `aliases.sh` | Shell functions and aliases. |
 | `completions.bash`, `completions.zsh` | Tab completion. `_re_reply_words`, `_re_reply_files` and `_re_reply_dirs` from `core/completions.bash` are available. |
 | `doctor.sh` | Checks for `re-doctor`, with its `doc_ok`, `doc_warn`, `doc_fail`, `doc_info` and `doc_tool` helpers. |
 | `purge.sh` | Calls `re_purge <path> [label]` for each file or folder its commands leave outside the repo (except under `$RE_DATA_DIR`, which core already covers). |
-| `local.example.sh` | Commented examples of its settings, copied to `local/ios.sh` by `./install`. |
 | `README.md` (the main one) | A section with the module's commands, requirements and settings, plus a line under **Modules**. |
 
 ## Notes

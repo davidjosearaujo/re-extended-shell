@@ -85,11 +85,7 @@ else
         exit 1
     fi
 
-    # Resolve the AVD directory (honours a custom path= in the .ini)
-    AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
-    [ -f "$AVD_HOME/$AVD_NAME.ini" ] || re_die "no AVD named '$AVD_NAME' (see 'emulator -list-avds')."
-    AVD_DIR=$(sed -n 's/^path=//p' "$AVD_HOME/$AVD_NAME.ini" 2>/dev/null)
-    [ -n "$AVD_DIR" ] || AVD_DIR="$AVD_HOME/$AVD_NAME.avd"
+    AVD_DIR=$(re_avd_dir "$AVD_NAME") || re_die "no AVD named '$AVD_NAME' (see 'emulator -list-avds')."
 
     # Decide the boot mode
     # (clean and create both boot wiped and save the snapshot afterwards)
@@ -128,7 +124,7 @@ else
     disown
 
     echo "Waiting for Android boot to complete..."
-    until [ "$("${ADB[@]}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
+    until re_boot_completed "$SERIAL"; do
         kill -0 "$EMU_PID" 2>/dev/null || re_die "emulator exited during boot. See $EMU_LOG"
         sleep 2
     done

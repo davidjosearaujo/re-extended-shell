@@ -60,6 +60,15 @@ _re_complete_kill_emulator() {
     fi
 }
 
+_re_complete_reset_emulator() {
+    local cur=${COMP_WORDS[COMP_CWORD]}
+    if [[ "$cur" == -* ]]; then
+        _re_reply_words "-h --help"
+    else
+        _re_reply_words "$(_re_serials) $(_re_avds)"
+    fi
+}
+
 _re_complete_release_device() {
     local cur=${COMP_WORDS[COMP_CWORD]}
     if [[ "$cur" == -* ]]; then
@@ -176,6 +185,7 @@ _re_complete_applog() {
 
 complete -F _re_complete_launch_emulator launch-emulator
 complete -F _re_complete_kill_emulator kill-emulator
+complete -F _re_complete_reset_emulator reset-emulator
 complete -F _re_complete_release_device release-device
 complete -F _re_complete_wireshark launch-emulator-wireshark
 complete -F _re_complete_xapk_installer xapk-installer

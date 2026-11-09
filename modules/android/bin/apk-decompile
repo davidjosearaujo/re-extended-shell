@@ -31,9 +31,7 @@ EOF
 OUT="" APK="" DO_JADX=1 DO_APKTOOL=1 ONLY="" DEOBF="" FORCE=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        -o|--output)
-            [ "$#" -ge 2 ] || re_die "$1 needs a directory."
-            OUT="$2"; shift 2 ;;
+        -o|--output) re_need_arg "$1" "$#"; OUT="$2"; shift 2 ;;
         --jadx-only) DO_APKTOOL=""; ONLY=1; shift ;;
         --apktool-only) DO_JADX=""; ONLY=1; shift ;;
         --deobf) DEOBF=1; shift ;;

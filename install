@@ -49,16 +49,12 @@ for SH in "${SHELLS[@]}"; do
 done
 clean_legacy_profile
 
-# Personal settings, never committed: local/<kind>.sh from local.example/, and
-# local/<module>.sh from each module's local.example.sh. Existing files are
-# never touched, so this also adds the templates of modules added later.
+# Personal settings, never committed: local/<kind>.sh from local.example/.
+# Existing files are never touched.
 mkdir -p "$REPO/local"
-for TEMPLATE in "$REPO"/local.example/*.sh "$REPO"/modules/*/local.example.sh; do
+for TEMPLATE in "$REPO"/local.example/*.sh; do
     [ -f "$TEMPLATE" ] || continue
-    case "$TEMPLATE" in
-        */local.example.sh) NAME=$(basename -- "$(dirname -- "$TEMPLATE")").sh ;;
-        *) NAME=$(basename -- "$TEMPLATE") ;;
-    esac
+    NAME=$(basename -- "$TEMPLATE")
     if [ ! -e "$REPO/local/$NAME" ]; then
         cp "$TEMPLATE" "$REPO/local/$NAME"
         echo "  Created local/$NAME (your settings)"
