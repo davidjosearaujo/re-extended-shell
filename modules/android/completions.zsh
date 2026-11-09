@@ -32,6 +32,8 @@ _re_launch_emulator() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
         '(--clean --wiped -d --device)'{--clean,--wiped}'[wiped boot, ignoring the snapshot]' \
+        '(--no-frida)--start-frida-server[also start frida-server]' \
+        '(--start-frida-server)--no-frida[do not push frida-server]' \
         '(--clean --wiped -d --device 1)'{-d,--device}'[use a connected physical device]::device serial:_re_serials --physical' \
         '1:AVD name:_re_avds'
 }
@@ -89,6 +91,7 @@ _re_frida_server() {
         '(--stop)--ssl-unpinning[spawn an app with SSL unpinning]:package:_re_packages' \
         '(--stop)*'{-l,--load}'[extra Frida script]:script:_files -g "*.js(-.)"' \
         '(--stop)--refresh[download frida-server and the scripts again]' \
+        '(--stop --ssl-unpinning)--push-only[push the binary without starting it]' \
         '(--ssl-unpinning -l --load --refresh)--stop[kill frida-server on the device]'
 }
 

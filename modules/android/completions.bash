@@ -45,7 +45,7 @@ _re_complete_launch_emulator() {
         -d|--device) _re_reply_words "$(_re_serials --physical)"; return ;;
     esac
     if [[ "$cur" == -* ]]; then
-        _re_reply_words "--clean --wiped -d --device -h --help"
+        _re_reply_words "--clean --wiped --start-frida-server --no-frida -d --device -h --help"
     else
         _re_reply_words "$(_re_avds)"
     fi
@@ -118,7 +118,7 @@ _re_complete_frida_server() {
         --ssl-unpinning) _re_reply_words "$(_re_packages)"; return ;;
         -l|--load)       _re_reply_files "js"; return ;;
     esac
-    _re_reply_words "-s --serial --ssl-unpinning -l --load --refresh --stop -h --help"
+    _re_reply_words "-s --serial --ssl-unpinning -l --load --refresh --push-only --stop -h --help"
 }
 
 _re_complete_apk_pull() {

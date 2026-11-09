@@ -17,7 +17,7 @@ UNPIN_SCRIPTS="${RE_FRIDA_UNPIN_SCRIPTS:-native-tls-hook.js android/android-prox
 
 usage() {
     cat <<EOF
-Usage: frida-server [-s SERIAL] [--refresh] [--ssl-unpinning PACKAGE [-l SCRIPT]...]
+Usage: frida-server [-s SERIAL] [--refresh] [--push-only] [--ssl-unpinning PACKAGE [-l SCRIPT]...]
        frida-server [-s SERIAL] --stop
   Downloads the frida-server build matching this machine's 'frida --version'
   and the device's CPU, pushes it and starts it as root. Does nothing if that
@@ -30,13 +30,15 @@ Usage: frida-server [-s SERIAL] [--refresh] [--ssl-unpinning PACKAGE [-l SCRIPT]
                            Exit the Frida REPL (Ctrl+D) to detach.
   -l, --load SCRIPT        Extra Frida script to load after the unpinning ones
                            (repeatable, needs --ssl-unpinning)
+  --push-only              Only put the binary on the device, don't start it
+                           (launch-emulator does this; the next frida-server starts it)
   --refresh                Download frida-server and the unpinning scripts again
   --stop                   Kill frida-server on the device
   Settings: RE_FRIDA_UNPIN_SCRIPTS, RE_FRIDA_UNPIN_REF (see README).
 EOF
 }
 
-SERIAL="" PACKAGE="" REFRESH="" STOP="" EXTRA=()
+SERIAL="" PACKAGE="" REFRESH="" STOP="" PUSH_ONLY="" EXTRA=()
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -s|--serial)
@@ -50,6 +52,7 @@ while [ "$#" -gt 0 ]; do
             [ -f "$2" ] || re_die "script not found: $2"
             EXTRA+=("$2"); shift 2 ;;
         --refresh) REFRESH=1; shift ;;
+        --push-only) PUSH_ONLY=1; shift ;;
         --stop) STOP=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) re_die "Unknown parameter: $1 (see frida-server --help)" ;;
@@ -57,6 +60,7 @@ while [ "$#" -gt 0 ]; do
 done
 [ "${#EXTRA[@]}" -eq 0 ] || [ -n "$PACKAGE" ] || re_die "-l/--load needs --ssl-unpinning PACKAGE."
 [ -z "$STOP" ] || [ -z "$PACKAGE" ] || re_die "--stop and --ssl-unpinning don't go together."
+[ -z "$PUSH_ONLY" ] || { [ -z "$STOP" ] && [ -z "$PACKAGE" ]; } || re_die "--push-only doesn't go with --stop or --ssl-unpinning."
 
 re_require adb
 SERIAL=$(re_pick_device "frida-server -s" "$SERIAL") || exit 1
@@ -125,21 +129,35 @@ with lzma.open(sys.argv[1]) as src, open(sys.argv[2], "wb") as dst:
     trap - EXIT
 fi
 
-# Start it, unless this very version already runs
+# Push the binary, unless this very version is already on the device
 DEVICE_VERSION=$(adb -s "$SERIAL" shell cat "$DEVICE_BIN.version" 2>/dev/null | tr -d '\r')
-if [ -n "$(running_pids)" ] && [ "$DEVICE_VERSION" = "$VERSION" ] && [ -z "$REFRESH" ]; then
-    echo "frida-server $VERSION is already running on $SERIAL."
-else
-    if [ -n "$(running_pids)" ]; then
-        echo "Stopping the frida-server already running on $SERIAL (${DEVICE_VERSION:-unknown version})..."
-        kill_server
-    fi
+ON_DEVICE=""
+if [ "$DEVICE_VERSION" = "$VERSION" ] && [ -z "$REFRESH" ] \
+        && adb -s "$SERIAL" shell "[ -x '$DEVICE_BIN' ] && echo yes" 2>/dev/null | grep -q yes; then
+    ON_DEVICE=1
+fi
+if [ -n "$(running_pids)" ] && { [ -z "$ON_DEVICE" ] || [ -n "$REFRESH" ]; }; then
+    echo "Stopping the frida-server already running on $SERIAL (${DEVICE_VERSION:-unknown version})..."
+    kill_server
+fi
+if [ -z "$ON_DEVICE" ]; then
     echo "Pushing frida-server $VERSION ($ARCH) to $SERIAL..."
     adb -s "$SERIAL" shell mkdir -p "$RE_DEVICE_DIR" || exit 1
     adb -s "$SERIAL" push "$LOCAL_BIN" "$DEVICE_BIN" >/dev/null || re_die "push failed."
     adb -s "$SERIAL" shell chmod 755 "$DEVICE_BIN"
     adb -s "$SERIAL" shell "echo $VERSION > $DEVICE_BIN.version"
+elif [ -n "$PUSH_ONLY" ]; then
+    echo "frida-server $VERSION is already on $SERIAL."
+fi
+if [ -n "$PUSH_ONLY" ]; then
+    echo "Start it with: frida-server -s $SERIAL"
+    exit 0
+fi
 
+# Start it, unless it's already running
+if [ -n "$(running_pids)" ]; then
+    echo "frida-server $VERSION is already running on $SERIAL."
+else
     echo "Starting frida-server as root ($ROOT)..."
     # Redirect on the device: the daemon would otherwise keep adb's output
     # open, and 'adb shell' would never return

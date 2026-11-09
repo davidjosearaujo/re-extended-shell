@@ -79,11 +79,11 @@ Settings shared by every module (put them in `local/env.sh`):
 
 | Command | What it does |
 | --- | --- |
-| `launch-emulator <AVD>` | Boots the AVD, injects the ZAP CA as a system CA and sets the global HTTP proxy to ZAP. The first boot saves a `zap-ready` snapshot, so later boots take seconds. `--clean` does a wiped boot that ignores the snapshot. |
-| `launch-emulator -d [SERIAL]` | Same setup on a rooted physical device (userdebug build, or `su` via Magisk/KernelSU). Routes the proxy through `adb reverse` and opens [scrcpy](https://github.com/Genymobile/scrcpy). |
+| `launch-emulator <AVD>` | Boots the AVD, injects the ZAP CA as a system CA and sets the global HTTP proxy to ZAP. The first boot saves a `zap-ready` snapshot, so later boots take seconds. `--clean` does a wiped boot that ignores the snapshot. Also pushes the matching frida-server build to the device (without starting it) when Frida is installed; `--start-frida-server` starts it too, `--no-frida` skips the push. |
+| `launch-emulator -d [SERIAL]` | Same setup on a rooted physical device (userdebug build, or `su` via Magisk/KernelSU). Routes the proxy through `adb reverse`, opens [scrcpy](https://github.com/Genymobile/scrcpy) and pushes frida-server the same way. |
 | `release-device [--reboot] [SERIAL]` | Undoes `launch-emulator -d`: clears the proxy, removes the tunnel, stops frida-server, deletes the pushed files and closes scrcpy. Run it before unplugging the phone, or its network stops working. |
 | `kill-emulator [-f] <AVD>` | Shuts an emulator down cleanly by AVD name, killing it only if it won't exit. |
-| `frida-server [-s SERIAL]` | Downloads the frida-server build that matches your `frida --version` and the device's CPU, pushes it and starts it as root. Does nothing if that version already runs. `--stop` kills it, `--refresh` downloads again. |
+| `frida-server [-s SERIAL]` | Downloads the frida-server build that matches your `frida --version` and the device's CPU, pushes it and starts it as root. Does nothing if that version already runs. `--push-only` stops after the push, `--stop` kills it, `--refresh` downloads again. |
 | `frida-server --ssl-unpinning <PKG>` | Then spawns the app under Frida with [HTTP Toolkit's unpinning scripts](https://github.com/httptoolkit/frida-interception-and-unpinning): it trusts the ZAP CA despite certificate pinning, and is forced through the same proxy `launch-emulator` sets. `-l script.js` loads your own scripts too. |
 | `apk-pull [-s SERIAL] <PKG>` | Pulls every APK of an installed app (base + splits) into `./<PKG>-splits/`. With `--merge`, saves a single installable `./<PKG>.apk` instead (merged with `xapk-merger` when the app has splits). |
 | `apk-decompile <file.apk>` | Decompiles into `./<name>/jadx/` (Java, with [jadx](https://github.com/skylot/jadx)) and `./<name>/apktool/` (smali, manifest and resources, with [apktool](https://apktool.org)), running whichever is installed. |
@@ -100,7 +100,7 @@ including AVD names, device serials and the packages installed on the device.
 A typical session with an app that pins its certificates:
 
 ```sh
-launch-emulator Pixel_8_API_34          # CA injected, proxied through ZAP
+launch-emulator Pixel_8_API_34          # CA injected, proxied through ZAP, frida-server pushed
 xapk-installer app.xapk                 # or install it from the Play Store
 frida-server --ssl-unpinning com.example.app
 applog com.example.app                  # in another terminal

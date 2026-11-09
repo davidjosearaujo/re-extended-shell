@@ -11,11 +11,17 @@ done
 
 usage() {
     cat <<EOF
-Usage: launch-emulator [--clean|--wiped] <AVD_NAME>
-       launch-emulator -d|--device [SERIAL]
+Usage: launch-emulator [--clean|--wiped] [--start-frida-server|--no-frida] <AVD_NAME>
+       launch-emulator -d|--device [--start-frida-server|--no-frida] [SERIAL]
   Boots from the '$RE_ZAP_SNAPSHOT' snapshot if it exists, otherwise does a
   wiped boot, sets up ZAP and saves the snapshot.
   --clean, --wiped  Wiped boot, ignoring (and not touching) the snapshot
+  --start-frida-server
+                    Also start frida-server once it's on the device (otherwise it is
+                    only pushed; 'frida-server' starts it later).
+  --no-frida        Don't push frida-server. By default the build matching this machine's
+                    Frida is put on the device, if Frida is installed (start it with
+                    'frida-server', see its --help).
   -d, --device      Use a connected physical device instead of an emulator.
                     It must be rooted (userdebug build, or su via Magisk/KernelSU).
                     Injects the CA, proxies through 'adb reverse' and opens scrcpy.
@@ -25,10 +31,12 @@ Usage: launch-emulator [--clean|--wiped] <AVD_NAME>
 EOF
 }
 
-CLEAN="" DEVICE="" SERIAL="" AVD_NAME=""
+CLEAN="" DEVICE="" SERIAL="" AVD_NAME="" NO_FRIDA="" START_FRIDA=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --clean|--wiped) CLEAN=1; shift ;;
+        --no-frida) NO_FRIDA=1; shift ;;
+        --start-frida-server) START_FRIDA=1; shift ;;
         -d|--device)
             DEVICE=1; shift
             # Optional serial right after the flag
@@ -40,6 +48,9 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+if [ -n "$NO_FRIDA" ] && [ -n "$START_FRIDA" ]; then
+    re_die "--no-frida and --start-frida-server don't go together."
+fi
 if [ -n "$DEVICE" ] && [ -n "$AVD_NAME" ]; then
     re_die "pass either an AVD name or -d|--device [SERIAL], not both."
 fi
@@ -157,6 +168,24 @@ fi
 echo "Setting global HTTP proxy to $PROXY..."
 "${ADB[@]}" shell settings put global http_proxy "$PROXY"
 
+# By default only puts the binary on the device (start it with frida-server, or
+# pass --start-frida-server). Runs before the snapshot is saved, so the binary
+# ends up in it, but a started server doesn't: when asked to, it starts after.
+# Best effort: the proxy and CA are already in place, so a failure only warns.
+FRIDA_SERVER="$(dirname -- "$_re_self")/frida-server"
+FRIDA_OK=""
+if [ -z "$NO_FRIDA" ]; then
+    if command -v frida >/dev/null 2>&1; then
+        if "$FRIDA_SERVER" -s "$SERIAL" --push-only; then
+            FRIDA_OK=1
+        else
+            echo "Warning: could not push frida-server, see above. Retry with: frida-server -s $SERIAL"
+        fi
+    else
+        echo "Frida not found on this machine, not pushing frida-server (pip install frida-tools, or pass --no-frida to silence this)."
+    fi
+fi
+
 if [ "$MODE" = "create" ]; then
     echo "Saving snapshot '$RE_ZAP_SNAPSHOT'..."
     if "${ADB[@]}" emu avd snapshot save "$RE_ZAP_SNAPSHOT" 2>&1 | grep -q "OK"; then
@@ -164,6 +193,10 @@ if [ "$MODE" = "create" ]; then
     else
         echo "Warning: failed to save snapshot '$RE_ZAP_SNAPSHOT'."
     fi
+fi
+
+if [ -n "$START_FRIDA" ] && [ -n "$FRIDA_OK" ]; then
+    "$FRIDA_SERVER" -s "$SERIAL" || echo "Warning: frida-server did not start, see above. Retry with: frida-server -s $SERIAL"
 fi
 
 if [ "$MODE" = "device" ]; then
