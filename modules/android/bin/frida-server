@@ -132,24 +132,22 @@ with lzma.open(sys.argv[1]) as src, open(sys.argv[2], "wb") as dst:
 fi
 
 # Push the binary, unless this very version is already on the device
-DEVICE_VERSION=$(adb -s "$SERIAL" shell cat "$DEVICE_BIN.version" 2>/dev/null | tr -d '\r')
+DEVICE_VERSION=$(adb -s "$SERIAL" shell "[ -x '$DEVICE_BIN' ] && cat '$DEVICE_BIN.version'" 2>/dev/null | tr -d '\r')
 ON_DEVICE=""
-if [ "$DEVICE_VERSION" = "$VERSION" ] && [ -z "$REFRESH" ] \
-        && adb -s "$SERIAL" shell "[ -x '$DEVICE_BIN' ] && echo yes" 2>/dev/null | grep -q yes; then
-    ON_DEVICE=1
-fi
-if [ -n "$(running_pids)" ] && { [ -z "$ON_DEVICE" ] || [ -n "$REFRESH" ]; }; then
+if [ "$DEVICE_VERSION" = "$VERSION" ] && [ -z "$REFRESH" ]; then ON_DEVICE=1; fi
+# Anything running is stale unless this very version stays; the local test goes
+# first so the common case saves a round trip to the device
+if [ -z "$ON_DEVICE" ] && [ -n "$(running_pids)" ]; then
     echo "Stopping the frida-server already running on $SERIAL (${DEVICE_VERSION:-unknown version})..."
     kill_server
 fi
 if [ -z "$ON_DEVICE" ]; then
-    echo "Pushing frida-server $VERSION ($ARCH) to $SERIAL..."
+    echo "Pushing frida-server $VERSION ($ARCH) to $SERIAL:$DEVICE_BIN..."
     adb -s "$SERIAL" shell mkdir -p "$RE_DEVICE_DIR" || exit 1
     adb -s "$SERIAL" push "$LOCAL_BIN" "$DEVICE_BIN" >/dev/null || re_die "push failed."
-    adb -s "$SERIAL" shell chmod 755 "$DEVICE_BIN"
-    adb -s "$SERIAL" shell "echo $VERSION > $DEVICE_BIN.version"
+    adb -s "$SERIAL" shell "chmod 755 '$DEVICE_BIN' && echo $VERSION > '$DEVICE_BIN.version'" || exit 1
 elif [ -n "$PUSH_ONLY" ]; then
-    echo "frida-server $VERSION is already on $SERIAL."
+    echo "frida-server $VERSION is already on $SERIAL:$DEVICE_BIN."
 fi
 if [ -n "$PUSH_ONLY" ]; then
     echo "Start it with: frida-server -s $SERIAL"

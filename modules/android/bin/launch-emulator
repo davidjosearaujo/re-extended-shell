@@ -15,7 +15,7 @@ Usage: launch-emulator [--clean|--wiped] [--start-frida-server|--no-frida] <AVD_
        launch-emulator -d|--device [--start-frida-server|--no-frida] [SERIAL]
   Boots from the '$RE_ZAP_SNAPSHOT' snapshot if it exists, otherwise does a
   wiped boot, sets up ZAP and saves the snapshot.
-  --clean, --wiped  Wiped boot, ignoring (and not touching) the snapshot
+  --clean, --wiped  Wiped boot ignoring the snapshot, then replaces it with a fresh one
   --start-frida-server
                     Also start frida-server once it's on the device (otherwise it is
                     only pushed; 'frida-server' starts it later).
@@ -92,14 +92,13 @@ else
     [ -n "$AVD_DIR" ] || AVD_DIR="$AVD_HOME/$AVD_NAME.avd"
 
     # Decide the boot mode
-    if [ -n "$CLEAN" ]; then
-        MODE="clean"
-        BOOT_ARGS=(-no-snapshot -wipe-data)
-    elif [ -d "$AVD_DIR/snapshots/$RE_ZAP_SNAPSHOT" ]; then
+    # (clean and create both boot wiped and save the snapshot afterwards)
+    if [ -z "$CLEAN" ] && [ -d "$AVD_DIR/snapshots/$RE_ZAP_SNAPSHOT" ]; then
         MODE="snapshot"
         BOOT_ARGS=(-snapshot "$RE_ZAP_SNAPSHOT" -no-snapshot-save)
     else
         MODE="create"
+        [ -z "$CLEAN" ] || MODE="clean"
         BOOT_ARGS=(-no-snapshot-load -no-snapshot-save -wipe-data)
     fi
 
@@ -114,7 +113,7 @@ else
     EMU_LOG="${TMPDIR:-/tmp}/emulator-$AVD_NAME.log"
 
     case "$MODE" in
-        clean)    echo "Starting forensic Android AVD: $AVD_NAME (wiped boot, snapshot ignored)" ;;
+        clean)    echo "Starting forensic Android AVD: $AVD_NAME (wiped boot, snapshot ignored and rebuilt)" ;;
         snapshot) echo "Starting forensic Android AVD: $AVD_NAME (from snapshot '$RE_ZAP_SNAPSHOT')" ;;
         create)   echo "Starting forensic Android AVD: $AVD_NAME (no '$RE_ZAP_SNAPSHOT' snapshot, wiped boot, will create it)" ;;
     esac
@@ -172,7 +171,7 @@ echo "Setting global HTTP proxy to $PROXY..."
 # pass --start-frida-server). Runs before the snapshot is saved, so the binary
 # ends up in it, but a started server doesn't: when asked to, it starts after.
 # Best effort: the proxy and CA are already in place, so a failure only warns.
-FRIDA_SERVER="$(dirname -- "$_re_self")/frida-server"
+FRIDA_SERVER="$RE_ANDROID_DIR/bin/frida-server"
 FRIDA_OK=""
 if [ -z "$NO_FRIDA" ]; then
     if command -v frida >/dev/null 2>&1; then
@@ -186,7 +185,7 @@ if [ -z "$NO_FRIDA" ]; then
     fi
 fi
 
-if [ "$MODE" = "create" ]; then
+if [ "$MODE" = "create" ] || [ "$MODE" = "clean" ]; then
     echo "Saving snapshot '$RE_ZAP_SNAPSHOT'..."
     if "${ADB[@]}" emu avd snapshot save "$RE_ZAP_SNAPSHOT" 2>&1 | grep -q "OK"; then
         echo "Snapshot '$RE_ZAP_SNAPSHOT' saved. Next launches will boot from it."

@@ -31,7 +31,7 @@ _re_packages() {
 _re_launch_emulator() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
-        '(--clean --wiped -d --device)'{--clean,--wiped}'[wiped boot, ignoring the snapshot]' \
+        '(--clean --wiped -d --device)'{--clean,--wiped}'[wiped boot, rebuilding the snapshot]' \
         '(--no-frida)--start-frida-server[also start frida-server]' \
         '(--start-frida-server)--no-frida[do not push frida-server]' \
         '(--clean --wiped -d --device 1)'{-d,--device}'[use a connected physical device]::device serial:_re_serials --physical' \
