@@ -39,11 +39,8 @@ for PID in $(pgrep -x scrcpy); do
 done
 [ -n "$FOUND" ] && echo "Closed scrcpy."
 
-echo "Clearing global HTTP proxy..."
-"${ADB[@]}" shell settings put global http_proxy :0
-
-echo "Removing adb reverse tunnel for port $RE_ZAP_PORT..."
-"${ADB[@]}" reverse --remove "tcp:$RE_ZAP_PORT" >/dev/null 2>&1
+echo "Clearing the global HTTP proxy and the adb reverse tunnel for port $RE_ZAP_PORT..."
+re_zap_proxy_off "$SERIAL"
 
 # frida-server (from the frida-server command) runs out of the pushed files
 if [ -n "$("${ADB[@]}" shell "ls $RE_DEVICE_DIR/frida-server 2>/dev/null" | tr -d '\r')" ] \

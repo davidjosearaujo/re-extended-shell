@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# Put a running emulator back to a saved snapshot, or save its state as one,
+# without restarting it.
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+usage() {
+    cat <<EOF
+Usage: reset-emulator [--snapshot NAME] [SERIAL|AVD_NAME]
+       reset-emulator --save [--snapshot NAME] [SERIAL|AVD_NAME]
+  Loads a snapshot into a running emulator (adb emu avd snapshot load) and waits
+  until it's usable again. Everything since the snapshot is dropped: installed
+  apps, app data, the proxy setting. The CA and frida-server are back as they
+  were when the snapshot was saved.
+  --save            Instead, save the emulator's current state as the snapshot
+                    (replacing it): set up the app under test once, then come back
+                    to that state with every reset.
+  --snapshot NAME   Snapshot to use (default: '$RE_ZAP_SNAPSHOT', RE_ZAP_SNAPSHOT). That is the
+                    one launch-emulator boots from, so --save without --snapshot
+                    changes where future launches start. Other names keep extra states.
+  With one emulator running it's picked for you; with several, name it by serial
+  (emulator-5554) or by AVD name.
+EOF
+}
+
+TARGET="" SNAP="$RE_ZAP_SNAPSHOT" SAVE=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --save) SAVE=1; shift ;;
+        --snapshot) re_need_arg "$1" "$#"; SNAP="$2"; shift 2 ;;
+        -*) re_die "Unknown option: $1" ;;
+        *)  [ -z "$TARGET" ] || re_die "Only one emulator at a time."; TARGET="$1"; shift ;;
+    esac
+done
+case "$SNAP" in
+    ""|*[!A-Za-z0-9._-]*) re_die "snapshot names use letters, digits, '.', '_' and '-' only: '$SNAP'" ;;
+esac
+
+re_require adb
+
+RUNNING=$(re_running_emulators)
+[ -n "$RUNNING" ] || re_die "no running emulator (start one with: launch-emulator <AVD>)."
+
+if [ -z "$TARGET" ]; then
+    if [ "$(wc -l <<<"$RUNNING")" -gt 1 ]; then
+        echo "Error: several emulators running, pick one with: reset-emulator <SERIAL|AVD_NAME>" >&2
+        sed 's/^/  /' <<<"$RUNNING" >&2
+        exit 1
+    fi
+    LINE=$RUNNING
+else
+    LINE=$(awk -v t="$TARGET" '$1 == t || $2 == t { print; exit }' <<<"$RUNNING")
+    if [ -z "$LINE" ]; then
+        echo "Error: no running emulator matches '$TARGET'. Running emulators:" >&2
+        sed 's/^/  /' <<<"$RUNNING" >&2
+        exit 1
+    fi
+fi
+SERIAL=${LINE%% *}
+NAME=${LINE#* }
+
+if [ -n "$SAVE" ]; then
+    echo "Saving the current state of $NAME ($SERIAL) as snapshot '$SNAP'..."
+    re_emu_snapshot "$SERIAL" save "$SNAP" || re_die "the emulator didn't save the snapshot (its reply is above)."
+    echo "Snapshot '$SNAP' saved. Restore it with: reset-emulator --snapshot $SNAP $SERIAL"
+    exit 0
+fi
+
+# Check for the snapshot up front (skipped if the AVD can't be located here,
+# then the emulator's own reply below decides)
+if AVD_DIR=$(re_avd_dir "$NAME") && [ ! -d "$AVD_DIR/snapshots/$SNAP" ]; then
+    echo "Error: $NAME has no '$SNAP' snapshot to reset to." >&2
+    if [ "$SNAP" = "$RE_ZAP_SNAPSHOT" ]; then
+        echo "Restart it so one gets saved:  kill-emulator $NAME  &&  launch-emulator $NAME" >&2
+    else
+        echo "Save it first with:  reset-emulator --save --snapshot $SNAP $SERIAL" >&2
+    fi
+    exit 1
+fi
+
+echo "Resetting $NAME ($SERIAL) to snapshot '$SNAP'..."
+re_emu_snapshot "$SERIAL" load "$SNAP" || re_die "the emulator didn't load the snapshot (its reply is above)."
+
+# adb can drop and reconnect while the state is restored
+adb -s "$SERIAL" wait-for-device
+for _ in $(seq 1 60); do
+    if re_boot_completed "$SERIAL"; then
+        echo "Emulator $NAME is back at snapshot '$SNAP'."
+        exit 0
+    fi
+    sleep 1
+done
+re_die "$SERIAL didn't report boot completed within 60s after the reset."

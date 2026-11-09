@@ -33,7 +33,7 @@ APK="" OUTPUT_APK="" KEYSTORE="" KS_PASS="android" KS_ALIAS="androiddebugkey" DE
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -o|--output|-k|--keystore|-p|--ks-pass|-a|--alias)
-            [ "$#" -ge 2 ] || re_die "$1 needs a value."
+            re_need_arg "$1" "$#"
             case "$1" in
                 -o|--output)   OUTPUT_APK="$2" ;;
                 -k|--keystore) KEYSTORE="$2" ;;

@@ -11,8 +11,8 @@ done
 SERIAL="" IFACE="any"
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        -s|--serial) SERIAL="$2"; shift 2 ;;
-        -i|--interface) IFACE="$2"; shift 2 ;;
+        -s|--serial) re_need_arg "$1" "$#"; SERIAL="$2"; shift 2 ;;
+        -i|--interface) re_need_arg "$1" "$#"; IFACE="$2"; shift 2 ;;
         -h|--help)
             echo "Usage: launch-emulator-wireshark [-s SERIAL] [-i INTERFACE]"
             echo "  Streams tcpdump from the device into a local Wireshark window."

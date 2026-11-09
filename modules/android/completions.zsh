@@ -45,6 +45,21 @@ _re_kill_emulator() {
         '1:AVD name:_re_avds'
 }
 
+_re_device_proxy() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '1:action:(on off status)' \
+        '2:device serial:_re_serials'
+}
+
+_re_reset_emulator() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '--save[save the current state as the snapshot]' \
+        '--snapshot[snapshot to use]:snapshot name: ' \
+        '1:emulator:_alternative "serials:emulator serial:_re_serials" "avds:AVD name:_re_avds"'
+}
+
 _re_release_device() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
@@ -137,6 +152,8 @@ _re_applog() {
 
 compdef _re_launch_emulator launch-emulator
 compdef _re_kill_emulator kill-emulator
+compdef _re_reset_emulator reset-emulator
+compdef _re_device_proxy device-proxy
 compdef _re_release_device release-device
 compdef _re_wireshark launch-emulator-wireshark
 compdef _re_xapk_installer xapk-installer

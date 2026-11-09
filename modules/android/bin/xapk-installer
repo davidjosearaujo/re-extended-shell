@@ -24,16 +24,15 @@ usage() {
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
     case $1 in
-        -s|--serial) DEVICE_SERIAL="$2"; shift 2 ;;
-        -n|--name)   TARGET_AVD="$2"; shift 2 ;;
+        -s|--serial) re_need_arg "$1" "$#"; DEVICE_SERIAL="$2"; shift 2 ;;
+        -n|--name)   re_need_arg "$1" "$#"; TARGET_AVD="$2"; shift 2 ;;
         -h|--help)   usage; exit 0 ;;
         *)
             if [[ "$1" == *.xapk || "$1" == *.zip ]]; then
                 XAPK_FILE="$1"
             else
-                echo "Error: Unknown parameter or invalid file extension: $1" >&2
                 usage >&2
-                exit 1
+                re_die "Unknown parameter or invalid file extension: $1"
             fi
             shift
             ;;
@@ -41,26 +40,18 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 if [ -z "$XAPK_FILE" ]; then
-    echo "Error: Please specify the path to a .xapk or .zip file." >&2
     usage >&2
-    exit 1
+    re_die "Please specify the path to a .xapk or .zip file."
 fi
-
-if [ ! -f "$XAPK_FILE" ]; then
-    echo "Error: File not found: $XAPK_FILE"
-    exit 1
-fi
+[ -f "$XAPK_FILE" ] || re_die "File not found: $XAPK_FILE"
 
 re_require unzip adb
 
 # If an AVD name was provided, resolve it to a serial number
 if [ -n "$TARGET_AVD" ]; then
     echo "Looking for emulator with AVD name: $TARGET_AVD..."
-    DEVICE_SERIAL=$(re_running_emulators | awk -v n="$TARGET_AVD" '$2 == n { print $1; exit }')
-    if [ -z "$DEVICE_SERIAL" ]; then
-        echo "Error: Could not find a running emulator with AVD name '$TARGET_AVD'."
-        exit 1
-    fi
+    DEVICE_SERIAL=$(re_emulator_serial "$TARGET_AVD")
+    [ -n "$DEVICE_SERIAL" ] || re_die "Could not find a running emulator with AVD name '$TARGET_AVD'."
     echo "Found $TARGET_AVD running on $DEVICE_SERIAL"
 fi
 
@@ -72,17 +63,14 @@ TMP_DIR=$(mktemp -d)
 trap 'echo "Cleaning up temporary files..."; rm -rf "$TMP_DIR"' EXIT
 
 echo "Extracting '$XAPK_FILE' to temporary directory..."
-unzip -q "$XAPK_FILE" -d "$TMP_DIR" || { echo "Error: Failed to extract archive."; exit 1; }
+unzip -q "$XAPK_FILE" -d "$TMP_DIR" || re_die "Failed to extract archive."
 
 APK_FILES=()
 while IFS= read -r -d $'\0'; do
     APK_FILES+=("$REPLY")
 done < <(find "$TMP_DIR" -name "*.apk" -print0)
 
-if [ ${#APK_FILES[@]} -eq 0 ]; then
-    echo "Error: No APK files found inside the archive."
-    exit 1
-fi
+[ ${#APK_FILES[@]} -gt 0 ] || re_die "No APK files found inside the archive."
 
 TARGET_INFO="to device '$DEVICE_SERIAL'"
 echo "Found ${#APK_FILES[@]} APK(s). Installing via adb install-multiple $TARGET_INFO..."
@@ -90,15 +78,14 @@ echo "Found ${#APK_FILES[@]} APK(s). Installing via adb install-multiple $TARGET
 if "${ADB_CMD[@]}" install-multiple "${APK_FILES[@]}"; then
     echo "APK Installation successful!"
 else
-    echo "APK Installation failed."
-    exit 1
+    re_die "APK installation failed."
 fi
 
 # Handle OBB Data
 if [ -d "$TMP_DIR/Android/obb" ]; then
     echo "OBB data found. Ensuring device directory exists..."
     "${ADB_CMD[@]}" shell mkdir -p /sdcard/Android/obb/
-    
+
     echo "Pushing OBB files to $TARGET_INFO..."
     if "${ADB_CMD[@]}" push "$TMP_DIR/Android/obb/." /sdcard/Android/obb/; then
         echo "OBB files pushed successfully!"

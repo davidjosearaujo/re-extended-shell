@@ -31,6 +31,13 @@ re_require() {
 
 RE_OS=$(uname -s)   # Linux, Darwin, ...
 
+# For option parsers: dies unless option $1 has a value after it. Without this,
+# 'shift 2' on a last argument fails and the parsing loop never ends.
+# Usage: -s|--serial) re_need_arg "$1" "$#"; SERIAL="$2"; shift 2 ;;
+re_need_arg() {
+    [ "$2" -ge 2 ] || re_die "$1 needs a value."
+}
+
 # Downloads URL to DEST through DEST.part, so a failed or interrupted download
 # never leaves a half-written file (or damages an existing one). Creates DEST's
 # directory. Extra arguments go to curl (e.g. --progress-bar, -sS).

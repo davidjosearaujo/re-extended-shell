@@ -18,7 +18,7 @@ fi
 if doc_tool required adb "every Android command" "Install the SDK's platform-tools."; then
     doc_info "$(adb version 2>/dev/null | head -n 1)"
 fi
-doc_tool optional emulator "launch-emulator, kill-emulator" "Install the SDK's emulator package." || true
+doc_tool optional emulator "launch-emulator, kill-emulator, reset-emulator" "Install the SDK's emulator package." || true
 if [ "$RE_OS" = Linux ]; then
     if [ ! -e /dev/kvm ]; then
         doc_warn "/dev/kvm missing: emulators run without acceleration (or not at all), androidcontainer can't run" \
@@ -109,8 +109,7 @@ for INI in "$AVD_HOME"/*.ini; do
     [ -f "$INI" ] || continue
     FOUND_AVD=1
     NAME=$(basename "$INI" .ini)
-    DIR=$(sed -n 's/^path=//p' "$INI" 2>/dev/null)
-    [ -n "$DIR" ] || DIR="$AVD_HOME/$NAME.avd"
+    DIR=$(re_avd_dir "$NAME")
     CONFIG="$DIR/config.ini"
     SYSDIR=$(sed -n 's/^image\.sysdir\.1 *= *//p' "$CONFIG" 2>/dev/null | head -n 1)
     PLAYSTORE=$(sed -n 's/^PlayStore\.enabled *= *//p' "$CONFIG" 2>/dev/null | head -n 1)
@@ -171,16 +170,10 @@ else
             ""|null|:0) doc_info "No global HTTP proxy" ;;
             *)
                 doc_info "Global HTTP proxy: $PROXY"
-                case "$SERIAL:$PROXY" in
-                    emulator-*) ;;
-                    *:127.0.0.1:*|*:localhost:*)
-                        PPORT=${PROXY##*:}
-                        if ! adb -s "$SERIAL" reverse --list 2>/dev/null | grep -q "tcp:$PPORT"; then
-                            doc_warn "$SERIAL proxies to $PROXY but has no adb reverse tunnel, so it has no network" \
-                                "Run 'launch-emulator -d $SERIAL' to set it up again, or 'release-device $SERIAL'."
-                        fi
-                        ;;
-                esac
+                if re_proxy_tunnel_missing "$SERIAL" "$PROXY"; then
+                    doc_warn "$SERIAL proxies to $PROXY but has no adb reverse tunnel, so it has no network" \
+                        "Run 'device-proxy on $SERIAL' to restore it, or 'device-proxy off $SERIAL'."
+                fi
                 ;;
         esac
         if [ -n "$FRIDA_PID" ]; then

@@ -43,7 +43,7 @@ if [ -z "$AVD_NAME" ]; then
 fi
 
 PIDS=$(emulator_pids "$AVD_NAME")
-SERIAL=$(re_running_emulators | awk -v n="$AVD_NAME" '$2 == n { print $1; exit }')
+SERIAL=$(re_emulator_serial "$AVD_NAME")
 
 if [ -z "$PIDS" ] && [ -z "$SERIAL" ]; then
     echo "No running emulator found with the name: $AVD_NAME"

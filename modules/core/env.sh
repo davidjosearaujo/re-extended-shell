@@ -44,9 +44,3 @@ EOF2
     unset _re_java
 fi
 if [ -n "${JAVA_HOME:-}" ]; then export JAVA_HOME; fi
-
-# Settings read by the commands of every module (defaults shown, override in
-# local/env.sh):
-#   RE_ZAP_PORT=9090                                  ZAP proxy port on this machine
-#   RE_ZAP_CERT="$RE_EXT_HOME/certs/zap_root_ca.cer"  ZAP root CA, PEM or DER
-#   JAVA_HOME=<the JDK behind 'java', or Homebrew's>  for the commands that run Java
