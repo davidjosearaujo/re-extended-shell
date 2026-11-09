@@ -45,6 +45,18 @@ else
 fi
 [ -d "$RE_EXT_HOME/local" ] || doc_warn "No local/ settings folder" "./install creates it."
 
+doc_section "Java"
+if [ -n "${JAVA_HOME:-}" ] && [ ! -x "$JAVA_HOME/bin/java" ]; then
+    doc_fail "JAVA_HOME has no bin/java: $JAVA_HOME" "Fix it in local/env.sh, or unset it to use the java on PATH."
+elif [ -n "${JAVA_HOME:-}" ]; then
+    doc_ok "JAVA_HOME $(doc_path "$JAVA_HOME")"
+fi
+if command -v java >/dev/null 2>&1; then
+    doc_info "$(java -version 2>&1 | head -n 1)"
+else
+    doc_info "No java found (JAVA_HOME unset, none on PATH): only the commands that run Java need it"
+fi
+
 doc_section "ZAP"
 if [ ! -f "$RE_ZAP_CERT" ]; then
     doc_fail "No ZAP root CA at $(doc_path "$RE_ZAP_CERT")" \

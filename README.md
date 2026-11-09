@@ -71,6 +71,7 @@ Settings shared by every module (put them in `local/env.sh`):
 | --- | --- |
 | `RE_ZAP_PORT` | `9090` |
 | `RE_ZAP_CERT` | `certs/zap_root_ca.cer` |
+| `JAVA_HOME` | the JDK behind `java` on PATH, else a Homebrew `openjdk` (its `bin/` is added to PATH if no `java` is there yet) |
 
 ## Android
 

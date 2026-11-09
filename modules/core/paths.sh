@@ -18,3 +18,9 @@ re_path_prepend() {
         *) if [ -d "$1" ]; then PATH="$1:$PATH"; fi ;;
     esac
 }
+
+# A JDK that's only known through JAVA_HOME (never added to PATH). Appended, so
+# a java already on PATH keeps winning.
+if [ -n "${JAVA_HOME:-}" ]; then
+    re_path_append "$JAVA_HOME/bin"
+fi

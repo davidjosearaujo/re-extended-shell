@@ -37,9 +37,7 @@ for TOOL in apksigner zipalign; do
             "Install the SDK build-tools (Android Studio's SDK Manager, or sdkmanager 'build-tools;<version>')."
     fi
 done
-if doc_tool optional java "xapk-merger (APKEditor), apk-patch, apk-decompile (apktool, jadx)"; then
-    doc_info "$(java -version 2>&1 | head -n 1)"
-fi
+doc_tool optional java "xapk-merger (APKEditor), apk-patch, apk-decompile (apktool, jadx)" "Install a JDK, or set JAVA_HOME in local/env.sh (then open a new shell)." || true
 doc_tool optional keytool "signing with a new debug keystore (comes with Java)" || true
 
 doc_section "Android: tools"

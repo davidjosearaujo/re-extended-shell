@@ -5,3 +5,4 @@
 # export RE_ZAP_PORT=8080
 # export RE_ZAP_CERT="$HOME/zap/zap_root_ca.cer"
 # export ANDROID_HOME="$HOME/sdk/android"
+# export JAVA_HOME="/usr/lib/jvm/java-21-openjdk-amd64"
