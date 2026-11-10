@@ -1,0 +1,314 @@
+#!/usr/bin/env bash
+# Show what RE Extended Shell installs: modules, commands, settings, PATH entries and more.
+_re_shell_home=${RE_EXT_HOME:-}   # set by re_extended_shell_main in your shell
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+usage() {
+    cat <<EOF
+Usage: re-extended-shell [-m MODULE]... [--modules] [--commands] [--envs] [--paths] [--aliases] [--functions] [--data]
+       re-extended-shell --version
+
+Shows what RE Extended Shell installs. With no section option, shows every
+section. Read-only.
+
+Options:
+  -m, --module MODULE  Only show this module (repeatable): $(re_modules | tr '\n' ' ')
+  --modules            The modules, and what each one is for
+  --commands           The commands, with what each one does, and whether this
+                       shell finds them on PATH
+  --envs               The settings (environment variables): their value, and
+                       whether it comes from local/env.sh, the environment or
+                       the default
+  --paths              The PATH entries the modules and local/paths.sh add, and
+                       whether this shell has them
+  --aliases            The aliases from the modules and local/aliases.sh
+  --functions          The shell functions from the modules and local/functions.sh
+  --data               What the commands downloaded and cached, and its size
+  --version            Show the version
+  -h, --help           Show this help
+
+Examples:
+  re-extended-shell                       # everything
+  re-extended-shell --commands            # every command
+  re-extended-shell -m android --envs     # the android module's settings
+EOF
+}
+
+ALL_SECTIONS="modules commands envs paths aliases functions data"
+ALL_MODULES=()
+while IFS= read -r M; do ALL_MODULES+=("$M"); done < <(re_modules)
+
+SECTIONS=() MODULES=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -m|--module)
+            re_need_arg "$1" "$#"
+            case " ${ALL_MODULES[*]} " in
+                *" $2 "*) ;;
+                *) re_die "no module '$2' (modules: ${ALL_MODULES[*]})." ;;
+            esac
+            MODULES+=("$2"); shift 2 ;;
+        --modules|--commands|--envs|--paths|--aliases|--functions|--data)
+            SECTIONS+=("${1#--}"); shift ;;
+        --version) echo "RE Extended Shell $(re_version)"; exit 0 ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
+        *)  re_unexpected_arg "$1" ;;
+    esac
+done
+# shellcheck disable=SC2206  # word-split on purpose
+[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=($ALL_SECTIONS)
+FILTERED=1
+if [ "${#MODULES[@]}" -eq 0 ]; then MODULES=("${ALL_MODULES[@]}"); FILTERED=""; fi
+# Whether this shell loaded this copy: only then does comparing it with a new shell make sense
+LOADED_HERE=""
+[ "$_re_shell_home" != "$RE_EXT_HOME" ] || LOADED_HERE=1
+
+# --- Output helpers (no subshells: they run for every line) ------------------------
+
+DIM=$RE_C_DIM WARN=$RE_C_WARN OFF=$RE_C_OFF
+WIDTH=0   # column width of row, set by width_of
+TILDE=""  # result of tilde
+
+# Sets WIDTH to the length of the longest argument
+width_of() {
+    local A
+    WIDTH=0
+    for A in "$@"; do [ "${#A}" -le "$WIDTH" ] || WIDTH=${#A}; done
+}
+
+# Sets TILDE to the path $1 with $HOME shortened to ~
+tilde() {
+    case "$1" in "$HOME"/*) TILDE="~${1#"$HOME"}" ;; *) TILDE=$1 ;; esac
+}
+
+section() { printf '\n%s%s%s\n' "$RE_C_BOLD" "$1" "$OFF"; }
+note() { printf '%s%s%s\n' "$DIM" "$1" "$OFF"; }
+# A line of a list: INDENT spaces, NAME padded to WIDTH, then TEXT
+# Usage: row INDENT NAME TEXT
+row() { printf '%*s%-*s  %s\n' "$1" "" "$WIDTH" "$2" "$3"; }
+
+# --- What a new shell would get ----------------------------------------------------
+
+# Runs in its own bash, so it starts from the exported environment like a new
+# shell. Replays the loader (re_extended_shell_main): the env files, then each
+# module's paths.sh and bin/, then local/paths.sh. Prints
+#   V<tab>NAME<tab>VALUE   for each setting NAME given
+#   P<tab>ORIGIN<tab>DIR   for each PATH entry added, in order
+replay() {
+    local N M E BEFORE MODS
+    MODS=$(re_modules)
+    {
+        [ ! -r "$RE_EXT_HOME/modules/core/env.sh" ] || . "$RE_EXT_HOME/modules/core/env.sh"
+        [ ! -r "$RE_EXT_HOME/local/env.sh" ] || . "$RE_EXT_HOME/local/env.sh"
+        for M in $MODS; do
+            [ "$M" = core ] || [ ! -r "$RE_EXT_HOME/modules/$M/env.sh" ] || . "$RE_EXT_HOME/modules/$M/env.sh"
+        done
+    } >/dev/null 2>&1 </dev/null
+    for N in "$@"; do printf 'V\t%s\t%s\n' "$N" "${!N:-}"; done
+    PATH=/usr/bin:/bin
+    for M in $MODS local; do
+        BEFORE=$PATH
+        {
+            if [ "$M" = local ]; then
+                [ ! -r "$RE_EXT_HOME/local/paths.sh" ] || . "$RE_EXT_HOME/local/paths.sh"
+            else
+                [ ! -r "$RE_EXT_HOME/modules/$M/paths.sh" ] || . "$RE_EXT_HOME/modules/$M/paths.sh"
+                [ ! -d "$RE_EXT_HOME/modules/$M/bin" ] || re_path_append "$RE_EXT_HOME/modules/$M/bin"
+            fi
+        } >/dev/null 2>&1 </dev/null
+        while IFS= read -r E; do
+            case ":$BEFORE:" in *":$E:"*) ;; *) printf 'P\t%s\t%s\n' "$M" "$E" ;; esac
+        done < <(tr ':' '\n' <<<"$PATH")
+    done
+}
+
+# Replays the loader once, however many sections need it. The settings' values
+# land in the variables NSV_<NAME>, the PATH entries in NEW_PATHS ("ORIGIN<tab>DIR" lines).
+NEW_SHELL_READ="" NEW_PATHS=""
+read_new_shell() {
+    local KIND A B NAMES
+    [ -z "$NEW_SHELL_READ" ] || return 0
+    NEW_SHELL_READ=1
+    NAMES=$(re_settings | cut -d'|' -f2)
+    while IFS=$'\t' read -r KIND A B; do
+        case "$KIND" in
+            V) printf -v "NSV_$A" '%s' "$B" ;;
+            P) NEW_PATHS="$NEW_PATHS$A"$'\t'"$B"$'\n' ;;
+        esac
+    done < <(RE_EXT_HOME="$RE_EXT_HOME" bash -c "$(declare -f re_modules re_path_append replay)"'
+        replay "$@"' _ $NAMES 2>/dev/null)
+}
+
+# --- Sections ----------------------------------------------------------------------
+
+show_modules() {
+    local M
+    section "Modules"
+    width_of "${MODULES[@]}"
+    for M in "${MODULES[@]}"; do row 2 "$M" "$(re_module_about "$M")"; done
+}
+
+show_commands() {
+    local M F CMD FOUND SUMMARY TITLED NAMES=()
+    section "Commands"
+    for M in "${MODULES[@]}"; do
+        for F in "$RE_EXT_HOME/modules/$M/bin"/*; do
+            [ -f "$F" ] && [ -x "$F" ] && NAMES+=("${F##*/}")
+        done
+    done
+    [ "${#NAMES[@]}" -gt 0 ] || { echo "  none"; return 0; }
+    width_of "${NAMES[@]}"
+    for M in "${MODULES[@]}"; do
+        TITLED=""
+        for F in "$RE_EXT_HOME/modules/$M/bin"/*; do
+            [ -f "$F" ] && [ -x "$F" ] || continue
+            [ -n "$TITLED" ] || { printf '  %s%s%s\n' "$RE_C_BOLD" "$M" "$OFF"; TITLED=1; }
+            CMD=${F##*/}
+            { read -r _; read -r SUMMARY; } <"$F"   # line 2 is the summary
+            SUMMARY=${SUMMARY#"#"}
+            row 4 "$CMD" "${SUMMARY# }"
+            [ -n "$LOADED_HERE" ] || continue
+            FOUND=$(command -v "$CMD" 2>/dev/null)
+            if [ -z "$FOUND" ]; then
+                row 4 "" "$WARN! not on this shell's PATH (open a new shell after ./install)$OFF"
+            elif [ ! "$FOUND" -ef "$F" ]; then
+                tilde "$FOUND"
+                row 4 "" "$WARN! this shell runs another copy: $TILDE$OFF"
+            fi
+        done
+    done
+    echo
+    note "Each command has --help."
+}
+
+show_envs() {
+    local LINES M PREV="" NAME DEFAULT DESC CMDS VAR VALUE NOW SRC RE LOCAL_ENV="" NAMES=()
+    section "Settings (environment variables)"
+    LINES=$(re_settings "${MODULES[*]}")
+    if [ -z "$LINES" ]; then
+        echo "  none"
+    else
+        read_new_shell
+        [ ! -f "$RE_EXT_HOME/local/env.sh" ] || read -r -d '' LOCAL_ENV <"$RE_EXT_HOME/local/env.sh" || true
+        while IFS='|' read -r _ NAME _; do NAMES+=("$NAME"); done <<<"$LINES"
+        width_of "${NAMES[@]}"
+        while IFS='|' read -r M NAME DEFAULT DESC CMDS; do
+            [ "$M" = "$PREV" ] || printf '  %s%s%s\n' "$RE_C_BOLD" "$M" "$OFF"
+            PREV=$M
+            VAR="NSV_$NAME"; VALUE=${!VAR}   # what a new shell gets
+            NOW=${!NAME:-}                   # what this one has
+            RE="(^|"$'\n'")[[:space:]]*(export[[:space:]]+)?$NAME="
+            if [[ $LOCAL_ENV =~ $RE ]]; then SRC="local/env.sh"
+            elif [ -n "$VALUE" ] && [ "$NOW" = "$VALUE" ]; then SRC="environment"
+            elif [ -n "$VALUE" ]; then SRC="detected"
+            else SRC=""; fi
+            if [ -n "$SRC" ]; then
+                row 4 "$NAME" "$VALUE $DIM($SRC)$OFF"
+            else
+                row 4 "$NAME" "${DIM}not set, default: $DEFAULT$OFF"
+            fi
+            row 4 "" "$DIM$DESC${CMDS:+. Used by: ${CMDS// /, }}$OFF"
+            if [ -n "$LOADED_HERE" ] && [ "$NOW" != "$VALUE" ]; then
+                row 4 "" "$WARN! this shell has ${NOW:+'$NOW'}${NOW:-it unset}: open a new shell$OFF"
+            fi
+        done <<<"$LINES"
+    fi
+    echo
+    tilde "$RE_EXT_HOME"
+    note "Set them in $TILDE/local/env.sh, then open a new shell."
+}
+
+show_paths() {
+    local ORIGIN DIR M WANT ANY=""
+    section "PATH entries"
+    read_new_shell
+    width_of local "${MODULES[@]}"
+    while IFS=$'\t' read -r ORIGIN DIR; do
+        [ -n "$DIR" ] || continue
+        WANT=""
+        [ "$ORIGIN" != local ] || [ -n "$FILTERED" ] || WANT=1
+        for M in "${MODULES[@]}"; do [ "$M" != "$ORIGIN" ] || WANT=1; done
+        [ -n "$WANT" ] || continue
+        ANY=1
+        tilde "$DIR"
+        case "${LOADED_HERE:+:$PATH:}" in
+            ""|*":$DIR:"*) row 2 "$ORIGIN" "$TILDE" ;;
+            *) row 2 "$ORIGIN" "$TILDE  $WARN! not in this shell's PATH$OFF" ;;
+        esac
+    done <<<"$NEW_PATHS"
+    [ -n "$ANY" ] || echo "  none"
+    echo
+    note "Module bin/ folders are added automatically; add your own in local/paths.sh."
+}
+
+# Aliases or functions defined in the chosen modules' files and, unless
+# filtered, local/. KIND is aliases or functions.
+show_defined() {
+    local KIND="$1" TITLE="$2" M F LINE ANY="" FILES=()
+    section "$TITLE"
+    for M in "${MODULES[@]}"; do FILES+=("modules/$M/$KIND.sh"); done
+    [ -n "$FILTERED" ] || FILES+=("local/$KIND.sh")
+    for F in "${FILES[@]}"; do
+        [ -f "$RE_EXT_HOME/$F" ] || continue
+        while IFS= read -r LINE; do
+            ANY=1
+            printf '  %s  %s(%s)%s\n' "$LINE" "$DIM" "$F" "$OFF"
+        done < <(
+            if [ "$KIND" = aliases ]; then
+                sed -n 's/^[[:space:]]*alias[[:space:]]\{1,\}\(.*\)$/\1/p' "$RE_EXT_HOME/$F"
+            else
+                sed -n 's/^[[:space:]]*\(function[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_-]*\)[[:space:]]*()[[:space:]]*.*$/\2()/p' "$RE_EXT_HOME/$F"
+            fi)
+    done
+    [ -n "$ANY" ] || echo "  none"
+    echo
+    tilde "$RE_EXT_HOME"
+    note "Add your own in $TILDE/local/$KIND.sh."
+}
+
+show_data() {
+    local D SIZE ANY=""
+    section "Downloads and caches"
+    for D in "$RE_DATA_DIR"/*; do
+        [ -e "$D" ] || continue
+        ANY=1
+        read -r SIZE _ < <(du -sh "$D" 2>/dev/null)
+        tilde "$D"
+        printf '  %-6s %s\n' "$SIZE" "$TILDE"
+    done
+    [ -n "$ANY" ] || echo "  nothing downloaded yet"
+    echo
+    tilde "$RE_DATA_DIR"
+    note "In $TILDE. './uninstall --purge' removes them."
+}
+
+# --- Output ------------------------------------------------------------------------
+
+if [ "${#SECTIONS[@]}" -gt 1 ]; then
+    tilde "$RE_EXT_HOME"
+    printf '%sRE Extended Shell %s%s, at %s\n' "$RE_C_BOLD" "$(re_version)" "$OFF" "$TILDE"
+fi
+if [ -z "$_re_shell_home" ]; then
+    echo "$WARN!$OFF Not loaded in this shell: open a new shell after ./install."
+elif [ -z "$LOADED_HERE" ]; then
+    tilde "$_re_shell_home"
+    echo "$WARN!$OFF This shell loaded another copy, $TILDE: its commands run instead of these."
+fi
+for S in "${SECTIONS[@]}"; do
+    case "$S" in
+        modules)   show_modules ;;
+        commands)  show_commands ;;
+        envs)      show_envs ;;
+        paths)     show_paths ;;
+        aliases)   show_defined aliases "Aliases" ;;
+        functions) show_defined functions "Functions" ;;
+        data)      show_data ;;
+    esac
+done

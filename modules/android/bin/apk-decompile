@@ -10,21 +10,22 @@ done
 
 usage() {
     cat <<EOF
-Usage: apk-decompile [-o DIR] [--jadx-only | --apktool-only] [--deobf] [-f] <file.apk>
-  Decompiles an APK into ./<name>/ (or DIR):
-    jadx/     Java sources and resources (jadx)
-    apktool/  smali, decoded AndroidManifest.xml and resources (apktool),
-              which 'apktool b' can rebuild
-  Runs whichever of jadx and apktool is installed, both if possible.
-  -o, --output DIR  Output directory (default: ./<apk name without .apk>)
+Usage: apk-decompile [-o DIR] [-f] [--jadx-only | --apktool-only] [--deobf] <file.apk>
+
+Decompiles an APK into ./<name>/ (or DIR):
+  jadx/     Java sources and resources (jadx)
+  apktool/  smali, decoded AndroidManifest.xml and resources (apktool), which
+            'apktool b' can rebuild
+Runs whichever of jadx and apktool is installed, both if possible. For split
+APKs (.xapk/.apks), merge them first: xapk-merger or apk-pull --merge.
+
+Options:
+  -o, --output DIR  Output directory (default: ./<name>, the APK's name without .apk)
+  -f, --force       Replace existing jadx/ and apktool/ output in DIR
   --jadx-only       Only run jadx
   --apktool-only    Only run apktool
   --deobf           Ask jadx to rename obfuscated classes and members
-  -f, --force       Replace existing jadx/ and apktool/ output in DIR
-  jadx has no 'apt' package and installs many ways, so set JADX to its command
-  if it isn't 'jadx' on PATH (e.g. JADX="flatpak run com.github.skylot.jadx",
-  or a path to a downloaded binary); likewise JADX_GUI for the browse hint.
-  For split APKs (.xapk/.apks), merge them first: xapk-merger or apk-pull --merge.
+  -h, --help        Show this help
 EOF
 }
 
@@ -36,14 +37,14 @@ while [ "$#" -gt 0 ]; do
         --apktool-only) DO_JADX=""; ONLY=1; shift ;;
         --deobf) DEOBF=1; shift ;;
         -f|--force) FORCE=1; shift ;;
-        -h|--help) usage; exit 0 ;;
-        -*) re_die "Unknown option: $1 (see apk-decompile --help)" ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
         *)
             [ -z "$APK" ] || re_die "only one APK at a time."
             APK="$1"; shift ;;
     esac
 done
-[ -n "$APK" ] || { usage >&2; exit 1; }
+[ -n "$APK" ] || re_usage_error "missing <file.apk>."
 [ -n "$DO_JADX" ] || [ -n "$DO_APKTOOL" ] || re_die "--jadx-only and --apktool-only don't go together."
 [ -f "$APK" ] || re_die "file not found: $APK"
 re_reject_bundle "$APK"
@@ -58,12 +59,12 @@ command -v apktool >/dev/null 2>&1 && HAVE_APKTOOL=1
     || re_die "needs jadx (set JADX if installed, https://github.com/skylot/jadx) and/or apktool (https://apktool.org)."
 if [ -n "$DO_JADX" ] && [ -z "$HAVE_JADX" ]; then
     [ -n "$ONLY" ] && re_die "jadx not found (set JADX to its command, e.g. 'flatpak run com.github.skylot.jadx'; https://github.com/skylot/jadx)."
-    echo "Warning: jadx not found, skipping Java decompilation (set JADX if it's installed; https://github.com/skylot/jadx)."
+    re_warn "jadx not found, skipping Java decompilation (set JADX if it's installed; https://github.com/skylot/jadx)."
     DO_JADX=""
 fi
 if [ -n "$DO_APKTOOL" ] && [ -z "$HAVE_APKTOOL" ]; then
     [ -n "$ONLY" ] && re_die "'apktool' is required (https://apktool.org)."
-    echo "Warning: 'apktool' not found, skipping smali and resources (https://apktool.org)."
+    re_warn "'apktool' not found, skipping smali and resources (https://apktool.org)."
     DO_APKTOOL=""
 fi
 
@@ -72,10 +73,8 @@ if [ -z "$OUT" ]; then
     OUT="$PWD/${BASE%.*}"
 fi
 for TOOL in ${DO_JADX:+jadx} ${DO_APKTOOL:+apktool}; do
-    if [ -e "$OUT/$TOOL" ]; then
-        [ -n "$FORCE" ] || re_die "$OUT/$TOOL already exists (use -f to replace it)."
-        rm -rf -- "${OUT:?}/$TOOL"
-    fi
+    re_refuse_existing "$FORCE" "$OUT/$TOOL"
+    rm -rf -- "${OUT:?}/$TOOL"
 done
 mkdir -p "$OUT" || exit 1
 
@@ -83,7 +82,7 @@ FAILED=""
 if [ -n "$DO_APKTOOL" ]; then
     echo "apktool: decoding into $OUT/apktool/..."
     if ! apktool d -f -o "$OUT/apktool" "$APK"; then
-        echo "Warning: apktool failed."
+        re_warn "apktool failed."
         FAILED=1
     fi
 fi
@@ -96,7 +95,7 @@ if [ -n "$DO_JADX" ]; then
         if [ -d "$OUT/jadx/sources" ]; then
             echo "jadx finished with errors (some code didn't decompile, see above)."
         else
-            echo "Warning: jadx failed."
+            re_warn "jadx failed."
             FAILED=1
         fi
     fi

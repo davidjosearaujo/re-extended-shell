@@ -12,24 +12,38 @@ INPUT_FILE=""
 OUTPUT_APK=""
 APKEDITOR_JAR="${APKEDITOR_JAR:-}"   # only set if you want to force a specific jar
 APKEDITOR_CMD=()
-KEYSTORE=""
-KS_PASS="android"
-KS_ALIAS="androiddebugkey"
 KEEP_OBB=1
 SKIP_SIGN=0
 PROVISION=0
+FORCE=""
 
 usage() {
-    echo "Usage: xapk-merger [-o <output.apk>] [-k <keystore> [-p <ks_pass>] [-a <alias>]] [-j <APKEditor.jar>] [--no-obb] <path_to_file.xapk | .zip | .apks | directory>"
-    echo "       xapk-merger --provision    Download APKEditor, or update it to the latest release"
-    echo ""
-    echo "Examples:"
-    echo "  xapk-merger game.xapk                              # -> ./game_merged.apk (debug-signed)"
-    echo "  xapk-merger com.example.app-splits/                # A directory of split APKs (e.g. from apk-pull)"
-    echo "  xapk-merger -o out/app.apk game.zip                # Custom output path"
-    echo "  xapk-merger -k my.jks -p secret -a mykey game.xapk # Sign with your own keystore"
-    echo "  xapk-merger -j ~/tools/APKEditor.jar game.xapk     # Force a specific APKEditor jar"
-    echo "  xapk-merger --provision                            # Fetch/update APKEditor, then exit"
+    cat <<EOF
+Usage: xapk-merger [-o FILE] [-f] [--no-obb] [-j JAR] [-k KEYSTORE [-p PASSWORD] [-a ALIAS]] <file.xapk|.zip|.apks|dir>
+       xapk-merger --provision
+
+Merges the split APKs of a bundle (or of a directory of APKs, e.g. from
+apk-pull) into one installable APK with APKEditor, then zipaligns and signs it.
+OBB data is copied next to the output, into <output>_obb/. APKEditor is
+'apkeditor' on PATH, else a jar downloaded on first use.
+
+Options:
+  -o, --output FILE        Output APK (default: ./<name>_merged.apk)
+  -f, --force              Replace an existing output
+  --no-obb                 Don't copy the OBB data
+  -j, --jar JAR            APKEditor jar to use
+  --provision              Download APKEditor, or update it to the latest release
+  -k, --keystore KEYSTORE  Sign with this keystore (default: the debug keystore)
+  -p, --ks-pass PASSWORD   Its password (default: android)
+  -a, --alias ALIAS        Its key alias (default: androiddebugkey)
+  -h, --help               Show this help
+
+Examples:
+  xapk-merger game.xapk                               # -> ./game_merged.apk
+  xapk-merger com.example.app-splits/                 # a directory of split APKs
+  xapk-merger -o out/app.apk game.zip                 # custom output path
+  xapk-merger -k my.jks -p secret -a mykey game.xapk  # sign with your own keystore
+EOF
 }
 
 # Older versions downloaded APKEditor to ~/.local/share/apkeditor/, move it over
@@ -66,26 +80,26 @@ download_apkeditor() {
 }
 
 # Parse arguments
-while [[ "$#" -gt 0 ]]; do
-    case $1 in
+while [ "$#" -gt 0 ]; do
+    case "$1" in
         -o|--output)   re_need_arg "$1" "$#"; OUTPUT_APK="$2"; shift 2 ;;
-        -k|--keystore) re_need_arg "$1" "$#"; KEYSTORE="$2"; shift 2 ;;
-        -p|--ks-pass)  re_need_arg "$1" "$#"; KS_PASS="$2"; shift 2 ;;
-        -a|--alias)    re_need_arg "$1" "$#"; KS_ALIAS="$2"; shift 2 ;;
+        -k|--keystore|-p|--ks-pass|-a|--alias) re_need_arg "$1" "$#"; re_sign_opt "$1" "$2"; shift 2 ;;
         -j|--jar)      re_need_arg "$1" "$#"; APKEDITOR_JAR="$2"; shift 2 ;;
+        -f|--force)    FORCE=1; shift ;;
         --no-obb)      KEEP_OBB=0; shift ;;
         --provision)   PROVISION=1; shift ;;
-        -h|--help)     usage; exit 0 ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
         *)
             # Accepts .xapk, .zip, .apks and a directory of APKs
-            if [[ -d "$1" || "$1" == *.xapk || "$1" == *.zip || "$1" == *.apks ]]; then
-                INPUT_FILE="$1"
-            else
-                usage >&2
-                re_die "Unknown parameter or invalid file extension: $1"
+            if [ ! -d "$1" ]; then
+                case "$1" in
+                    *.xapk|*.zip|*.apks) ;;
+                    *) re_die "not a .xapk, .zip or .apks file, or a directory: $1" ;;
+                esac
             fi
-            shift
-            ;;
+            [ -z "$INPUT_FILE" ] || re_die "only one input at a time."
+            INPUT_FILE="$1"; shift ;;
     esac
 done
 
@@ -102,12 +116,18 @@ if [ "$PROVISION" -eq 1 ]; then
     [ -n "$INPUT_FILE" ] || exit 0
 fi
 
-if [ -z "$INPUT_FILE" ]; then
-    usage >&2
-    re_die "please specify the path to a .xapk, .zip or .apks file, or a directory of APKs."
-fi
+[ -n "$INPUT_FILE" ] || re_usage_error "missing <file.xapk|.zip|.apks|dir>."
 [ -f "$INPUT_FILE" ] || [ -d "$INPUT_FILE" ] || re_die "file not found: $INPUT_FILE"
 
+# Default output name: <input>_merged.apk in current dir
+if [ -z "$OUTPUT_APK" ]; then
+    BASE=$(basename "$INPUT_FILE")
+    [ -d "$INPUT_FILE" ] || BASE="${BASE%.*}"
+    OUTPUT_APK="$PWD/${BASE}_merged.apk"
+fi
+OBB_OUT="${OUTPUT_APK%.apk}_obb"
+re_refuse_existing "$FORCE" "$OUTPUT_APK"
+[ "$KEEP_OBB" -eq 0 ] || re_refuse_existing "$FORCE" "$OBB_OUT" "replace it, or --no-obb"
 # Check dependencies
 [ -d "$INPUT_FILE" ] || re_require unzip
 re_find_build_tool apksigner >/dev/null || re_die "'apksigner' not found (PATH or \$ANDROID_HOME/build-tools)."
@@ -130,12 +150,6 @@ else
 fi
 echo "Using APKEditor: ${APKEDITOR_CMD[*]}"
 
-# Default output name: <input>_merged.apk in current dir
-if [ -z "$OUTPUT_APK" ]; then
-    BASE=$(basename "$INPUT_FILE")
-    [ -d "$INPUT_FILE" ] || BASE="${BASE%.*}"
-    OUTPUT_APK="$PWD/${BASE}_merged.apk"
-fi
 mkdir -p "$(dirname "$OUTPUT_APK")"
 
 # Create temp directory and ensure it gets cleaned up (even on failure/Ctrl+C)
@@ -179,7 +193,7 @@ else
     done
 
     echo "Found ${#APK_FILES[@]} APK(s). Merging with APKEditor..."
-    "${APKEDITOR_CMD[@]}" m -i "$SPLITS_DIR" -o "$TMP_DIR/merged-unsigned.apk" || re_die "APK merge failed."
+    "${APKEDITOR_CMD[@]}" m -i "$SPLITS_DIR" -o "$TMP_DIR/merged-unsigned.apk" || re_die "APKEditor could not merge the splits."
     [ -f "$TMP_DIR/merged-unsigned.apk" ] || re_die "APKEditor finished but no merged APK was produced."
 fi
 
@@ -189,7 +203,6 @@ fi
 
 # Handle OBB Data (can't be embedded in an APK, so copy alongside)
 if [ "$KEEP_OBB" -eq 1 ] && [ -d "$EXTRACT_DIR/Android/obb" ]; then
-    OBB_OUT="${OUTPUT_APK%.apk}_obb"
     echo "OBB data found. Copying to '$OBB_OUT'..."
     rm -rf "$OBB_OUT"
     mkdir -p "$OBB_OUT"
@@ -198,4 +211,3 @@ if [ "$KEEP_OBB" -eq 1 ] && [ -d "$EXTRACT_DIR/Android/obb" ]; then
 fi
 
 echo "Merged APK: $OUTPUT_APK"
-echo "Done!"

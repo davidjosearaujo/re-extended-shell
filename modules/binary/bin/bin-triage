@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# First look at a native executable or library: identity, hashes, entropy,
-# hardening, imports and interesting strings.
+# First look at a native executable or library: hashes, entropy, hardening, imports, strings.
 # shellcheck source=../lib.sh
 _re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
 while [ -L "$_re_self" ]; do
@@ -12,18 +11,25 @@ done
 usage() {
     cat <<EOF
 Usage: bin-triage [-n LENGTH] [-l LIMIT] <file>
-  A first look at an ELF, Mach-O or PE file (other files get the generic parts):
-    identity    file type, size, MD5, SHA-1, SHA-256
-    entropy     Shannon entropy (sampled above 16 MiB); near 8 means packed or encrypted
-    hardening   PIE, NX, RELRO, stack canary, fortify, stripped (ELF); PIE, canary,
-                signed, encrypted (Mach-O); ASLR, DEP, control-flow guard (PE)
-    libraries   what it links against
-    imports     the ones that matter: exec, network, memory, anti-debugging, ...
-    strings     URLs, IP addresses, e-mail addresses, paths, keys and
-                password-like words found in its printable strings
-  Read-only: the file is never run or changed.
-  -n, --min-length N  Shortest string to consider (default 8)
-  -l, --limit N       Most lines shown per list (default 10)
+
+A first look at an ELF, Mach-O or PE file (other files get the generic parts).
+Read-only: the file is never run or changed.
+
+Output:
+  identity   file type, size, MD5, SHA-1, SHA-256
+  entropy    Shannon entropy (sampled above 16 MiB); near 8 means packed or
+             encrypted
+  hardening  PIE, NX, RELRO, stack canary, fortify, stripped (ELF); PIE,
+             canary, signed, encrypted (Mach-O); ASLR, DEP, control-flow guard (PE)
+  libraries  what it links against
+  imports    the ones that matter: exec, network, memory, anti-debugging, ...
+  strings    URLs, IP addresses, e-mail addresses, paths, keys and
+             password-like words found in its printable strings
+
+Options:
+  -n, --min-length LENGTH  Shortest string to consider (default: 8)
+  -l, --limit LIMIT        Most lines shown per list (default: 10)
+  -h, --help               Show this help
 EOF
 }
 
@@ -32,14 +38,14 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         -n|--min-length) re_need_arg "$1" "$#"; MINLEN="$2"; shift 2 ;;
         -l|--limit)      re_need_arg "$1" "$#"; LIMIT="$2"; shift 2 ;;
-        -h|--help) usage; exit 0 ;;
-        -*) re_die "Unknown option: $1 (see bin-triage --help)" ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
         *)
             [ -z "$FILE" ] || re_die "only one file at a time."
             FILE="$1"; shift ;;
     esac
 done
-[ -n "$FILE" ] || { usage >&2; exit 1; }
+[ -n "$FILE" ] || re_usage_error "missing <file>."
 case "$MINLEN$LIMIT" in ""|*[!0-9]*) re_die "-n and -l take a number." ;; esac
 [ -f "$FILE" ] || re_die "file not found: $FILE"
 case "$FILE" in -*) FILE="./$FILE" ;; esac

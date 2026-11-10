@@ -18,18 +18,26 @@ for _f in "$RE_EXT_HOME"/modules/*/doctor.sh; do
 done
 
 usage() {
-    echo "Usage: re-doctor [MODULE...]"
-    echo "  Checks the shell setup, the ZAP certificate and proxy, then each module's"
-    echo "  tools, emulators and connected devices, and says how to fix what's missing."
-    echo "  Changes nothing. Exits non-zero if something required is missing."
-    echo "  Modules: ${ALL_MODULES[*]} (default: all)"
+    cat <<EOF
+Usage: re-doctor [MODULE...]
+
+Checks the shell setup, the ZAP certificate and proxy, then each module's
+tools, emulators and connected devices, and says how to fix what's missing.
+Read-only. Exits non-zero if something required is missing.
+
+Arguments:
+  MODULE  Only check these modules: ${ALL_MODULES[*]} (default: all)
+
+Options:
+  -h, --help  Show this help
+EOF
 }
 
 MODULES=()
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        -h|--help) usage; exit 0 ;;
-        -*) re_die "Unknown option: $1 (see re-doctor --help)" ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
         *)
             if [ ! -f "$RE_EXT_HOME/modules/$1/doctor.sh" ] || [ "$1" = core ]; then
                 re_die "no checks for a module '$1' (modules: ${ALL_MODULES[*]})."
@@ -41,20 +49,15 @@ done
 
 # --- Output helpers, used by the modules' doctor.sh files --------------------
 
-if [ -t 1 ]; then
-    C_OK=$'\033[32m' C_WARN=$'\033[33m' C_FAIL=$'\033[31m' C_BOLD=$'\033[1m' C_DIM=$'\033[2m' C_OFF=$'\033[0m'
-else
-    C_OK="" C_WARN="" C_FAIL="" C_BOLD="" C_DIM="" C_OFF=""
-fi
 FAILS=0 WARNS=0
 
-doc_section() { printf '\n%s%s%s\n' "$C_BOLD" "$1" "$C_OFF"; }
-_doc_hint() { [ -z "${1:-}" ] || printf '      %s%s%s\n' "$C_DIM" "$1" "$C_OFF"; }
+doc_section() { printf '\n%s%s%s\n' "$RE_C_BOLD" "$1" "$RE_C_OFF"; }
+_doc_hint() { [ -z "${1:-}" ] || printf '      %s%s%s\n' "$RE_C_DIM" "$1" "$RE_C_OFF"; }
 # doc_ok|doc_warn|doc_fail|doc_info MESSAGE [HINT]
-doc_ok()   { printf '  %s✓%s %s\n' "$C_OK" "$C_OFF" "$1"; _doc_hint "${2:-}"; }
-doc_warn() { WARNS=$((WARNS + 1)); printf '  %s!%s %s\n' "$C_WARN" "$C_OFF" "$1"; _doc_hint "${2:-}"; }
-doc_fail() { FAILS=$((FAILS + 1)); printf '  %s✗%s %s\n' "$C_FAIL" "$C_OFF" "$1"; _doc_hint "${2:-}"; }
-doc_info() { printf '  %s-%s %s\n' "$C_DIM" "$C_OFF" "$1"; _doc_hint "${2:-}"; }
+doc_ok()   { printf '  %s✓%s %s\n' "$RE_C_OK" "$RE_C_OFF" "$1"; _doc_hint "${2:-}"; }
+doc_warn() { WARNS=$((WARNS + 1)); printf '  %s!%s %s\n' "$RE_C_WARN" "$RE_C_OFF" "$1"; _doc_hint "${2:-}"; }
+doc_fail() { FAILS=$((FAILS + 1)); printf '  %s✗%s %s\n' "$RE_C_FAIL" "$RE_C_OFF" "$1"; _doc_hint "${2:-}"; }
+doc_info() { printf '  %s-%s %s\n' "$RE_C_DIM" "$RE_C_OFF" "$1"; _doc_hint "${2:-}"; }
 
 # Reports whether a command is on PATH. Fails for required tools, warns for
 # optional ones. Prints nothing else, so callers can add version details.
@@ -62,7 +65,7 @@ doc_info() { printf '  %s-%s %s\n' "$C_DIM" "$C_OFF" "$1"; _doc_hint "${2:-}"; }
 doc_tool() {
     local LEVEL="$1" CMD="$2" WHAT="$3" HINT="${4:-}" P
     if P=$(command -v "$CMD" 2>/dev/null); then
-        doc_ok "$CMD ${C_DIM}$P${C_OFF}"
+        doc_ok "$CMD ${RE_C_DIM}$P${RE_C_OFF}"
         return 0
     fi
     if [ "$LEVEL" = required ]; then
@@ -73,8 +76,6 @@ doc_tool() {
     return 1
 }
 
-# Shortens $HOME to ~ for display
-doc_path() { case "$1" in "$HOME"/*) echo "~${1#"$HOME"}" ;; *) echo "$1" ;; esac; }
 
 # --- Checks ------------------------------------------------------------------
 
@@ -87,10 +88,10 @@ done
 
 echo
 if [ "$FAILS" -gt 0 ]; then
-    printf '%s%d problem(s)%s, %d warning(s).\n' "$C_FAIL" "$FAILS" "$C_OFF" "$WARNS"
+    printf '%s%d problem(s)%s, %d warning(s).\n' "$RE_C_FAIL" "$FAILS" "$RE_C_OFF" "$WARNS"
     exit 1
 elif [ "$WARNS" -gt 0 ]; then
-    printf '%sNo problems%s, %d warning(s) (optional tools or settings).\n' "$C_OK" "$C_OFF" "$WARNS"
+    printf '%sNo problems%s, %d warning(s) (optional tools or settings).\n' "$RE_C_OK" "$RE_C_OFF" "$WARNS"
 else
-    printf '%sAll good.%s\n' "$C_OK" "$C_OFF"
+    printf '%sAll good.%s\n' "$RE_C_OK" "$RE_C_OFF"
 fi

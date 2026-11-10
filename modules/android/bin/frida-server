@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Start the frida-server matching the host's Frida on a rooted device and,
-# optionally, spawn an app with HTTP Toolkit's SSL unpinning scripts.
+# Start the matching frida-server on a rooted device, optionally spawning an app with SSL unpinning.
 # shellcheck source=../lib.sh
 _re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
 while [ -L "$_re_self" ]; do
@@ -19,22 +18,25 @@ usage() {
     cat <<EOF
 Usage: frida-server [-s SERIAL] [--refresh] [--push-only] [--ssl-unpinning PACKAGE [-l SCRIPT]...]
        frida-server [-s SERIAL] --stop
-  Downloads the frida-server build matching this machine's 'frida --version'
-  and the device's CPU, pushes it and starts it as root. Does nothing if that
-  version is already running. Needs root (adb root, or su via Magisk/KernelSU).
+
+Downloads the frida-server build matching this machine's 'frida --version' and
+the device's CPU, pushes it and starts it as root. Does nothing if that version
+is already running. Needs root (adb root, or su via Magisk/KernelSU).
+
+Options:
   -s, --serial SERIAL      Device to use (optional with a single device)
   --ssl-unpinning PACKAGE  Then spawn PACKAGE under Frida with HTTP Toolkit's
                            unpinning scripts: the app trusts the ZAP CA despite
-                           certificate pinning, and is forced through the same
-                           proxy launch-emulator sets ($RE_ZAP_PORT on this machine).
-                           Exit the Frida REPL (Ctrl+D) to detach.
+                           certificate pinning, and goes through the same proxy
+                           launch-emulator sets (port $RE_ZAP_PORT on this
+                           machine). Exit the Frida REPL (Ctrl+D) to detach.
   -l, --load SCRIPT        Extra Frida script to load after the unpinning ones
                            (repeatable, needs --ssl-unpinning)
   --push-only              Only put the binary on the device, don't start it
-                           (launch-emulator does this; the next frida-server starts it)
+                           (launch-emulator does this)
   --refresh                Download frida-server and the unpinning scripts again
   --stop                   Kill frida-server on the device
-  Settings: RE_FRIDA_UNPIN_SCRIPTS, RE_FRIDA_UNPIN_REF (see README).
+  -h, --help               Show this help
 EOF
 }
 
@@ -42,9 +44,7 @@ SERIAL="" PACKAGE="" REFRESH="" STOP="" PUSH_ONLY="" EXTRA=()
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -s|--serial) re_need_arg "$1" "$#"; SERIAL="$2"; shift 2 ;;
-        --ssl-unpinning)
-            if [ "$#" -lt 2 ] || [ "${2#-}" != "$2" ]; then re_die "--ssl-unpinning needs a package name."; fi
-            PACKAGE="$2"; shift 2 ;;
+        --ssl-unpinning) re_need_arg "$1" "$#"; PACKAGE="$2"; shift 2 ;;
         -l|--load)
             re_need_arg "$1" "$#"
             [ -f "$2" ] || re_die "script not found: $2"
@@ -52,8 +52,9 @@ while [ "$#" -gt 0 ]; do
         --refresh) REFRESH=1; shift ;;
         --push-only) PUSH_ONLY=1; shift ;;
         --stop) STOP=1; shift ;;
-        -h|--help) usage; exit 0 ;;
-        *) re_die "Unknown parameter: $1 (see frida-server --help)" ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
+        *)  re_unexpected_arg "$1" ;;
     esac
 done
 [ "${#EXTRA[@]}" -eq 0 ] || [ -n "$PACKAGE" ] || re_die "-l/--load needs --ssl-unpinning PACKAGE."
@@ -193,7 +194,7 @@ re_prepare_cert "$WORK_DIR"
 # anything else gets the port tunnelled back over adb
 PROXY_HOST=$(re_zap_proxy "$SERIAL") || re_die "could not forward the device's port $RE_ZAP_PORT to ZAP (adb reverse)."
 PROXY_HOST=${PROXY_HOST%:*}
-re_port_listening "$RE_ZAP_PORT" || echo "Warning: nothing listens on port $RE_ZAP_PORT, is ZAP running?"
+re_port_listening "$RE_ZAP_PORT" || re_warn "nothing listens on port $RE_ZAP_PORT, is ZAP running?"
 
 # config.js with the ZAP CA and proxy filled in
 CONFIG="$WORK_DIR/config.js"

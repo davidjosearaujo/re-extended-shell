@@ -8,7 +8,7 @@
 
 doc_section "Android: SDK"
 if [ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME" ]; then
-    doc_ok "ANDROID_HOME $(doc_path "$ANDROID_HOME")"
+    doc_ok "ANDROID_HOME $(re_tilde "$ANDROID_HOME")"
 elif [ -n "${ANDROID_HOME:-}" ]; then
     doc_fail "ANDROID_HOME points to a missing directory: $ANDROID_HOME" "Fix it in local/env.sh."
 else
@@ -31,7 +31,7 @@ if [ "$RE_OS" = Linux ]; then
 fi
 for TOOL in apksigner zipalign; do
     if P=$(re_find_build_tool "$TOOL"); then
-        doc_ok "$TOOL ${C_DIM}$(doc_path "$P")${C_OFF}"
+        doc_ok "$TOOL ${RE_C_DIM}$(re_tilde "$P")${RE_C_OFF}"
     else
         doc_warn "$TOOL not found, needed by xapk-merger, apk-pull --merge, apk-patch" \
             "Install the SDK build-tools (Android Studio's SDK Manager, or sdkmanager 'build-tools;<version>')."
@@ -43,13 +43,13 @@ doc_tool optional keytool "signing with a new debug keystore (comes with Java)" 
 doc_section "Android: tools"
 doc_tool optional unzip "xapk-installer, xapk-merger" || true
 if [ -n "${APKEDITOR_JAR:-}" ]; then
-    if [ -f "$APKEDITOR_JAR" ]; then doc_ok "APKEditor $(doc_path "$APKEDITOR_JAR") (APKEDITOR_JAR)"
+    if [ -f "$APKEDITOR_JAR" ]; then doc_ok "APKEditor $(re_tilde "$APKEDITOR_JAR") (APKEDITOR_JAR)"
     else doc_warn "APKEDITOR_JAR points to a missing file: $APKEDITOR_JAR"; fi
 elif command -v apkeditor >/dev/null 2>&1; then
-    doc_ok "apkeditor ${C_DIM}$(command -v apkeditor)${C_OFF}"
+    doc_ok "apkeditor ${RE_C_DIM}$(command -v apkeditor)${RE_C_OFF}"
 elif [ -f "$RE_APKEDITOR_DL" ]; then
     APKEDITOR_VERSION=$(cat "$RE_APKEDITOR_DL.version" 2>/dev/null)
-    doc_ok "APKEditor ${APKEDITOR_VERSION:+$APKEDITOR_VERSION }${C_DIM}$(doc_path "$RE_APKEDITOR_DL")${C_OFF}"
+    doc_ok "APKEditor ${APKEDITOR_VERSION:+$APKEDITOR_VERSION }${RE_C_DIM}$(re_tilde "$RE_APKEDITOR_DL")${RE_C_OFF}"
     doc_info "Update it to the latest release with: xapk-merger --provision"
 elif [ -f "$HOME/.local/share/apkeditor/APKEditor.jar" ]; then
     doc_ok "APKEditor ~/.local/share/apkeditor/APKEditor.jar (xapk-merger moves it on next use)"
@@ -66,7 +66,7 @@ if doc_tool optional apktool "apk-decompile, apk-patch" "https://apktool.org"; t
     fi
 fi
 if re_tool_cmd "${JADX:-jadx}"; then
-    doc_ok "jadx ${C_DIM}${JADX:-$(command -v jadx)}${C_OFF}"
+    doc_ok "jadx ${RE_C_DIM}${JADX:-$(command -v jadx)}${RE_C_OFF}"
 else
     doc_warn "jadx not found, needed by apk-decompile" \
         "No 'apt' package: install via brew/flatpak/a downloaded bin, then set JADX to its command if it isn't 'jadx' on PATH (https://github.com/skylot/jadx)."
@@ -89,7 +89,7 @@ if doc_tool optional frida "frida-server" "pip install frida-tools (or pipx inst
 fi
 doc_tool optional scrcpy "launch-emulator -d (screen mirroring)" "https://github.com/Genymobile/scrcpy" || true
 if P=$(re_find_gui_tool wireshark Wireshark); then
-    doc_ok "wireshark ${C_DIM}$P${C_OFF}"
+    doc_ok "wireshark ${RE_C_DIM}$P${RE_C_OFF}"
 else
     doc_warn "wireshark not found, needed by launch-emulator-wireshark" "https://www.wireshark.org"
 fi
@@ -133,7 +133,7 @@ for INI in "$AVD_HOME"/*.ini; do
         doc_ok "$NAME: $DESC"
     fi
 done
-[ -n "$FOUND_AVD" ] || doc_info "No AVDs in $(doc_path "$AVD_HOME") (create one in Android Studio's Device Manager, with a Google APIs image)"
+[ -n "$FOUND_AVD" ] || doc_info "No AVDs in $(re_tilde "$AVD_HOME") (create one in Android Studio's Device Manager, with a Google APIs image)"
 
 doc_section "Android: connected devices"
 if ! command -v adb >/dev/null 2>&1; then
@@ -172,7 +172,7 @@ else
                 doc_info "Global HTTP proxy: $PROXY"
                 if re_proxy_tunnel_missing "$SERIAL" "$PROXY"; then
                     doc_warn "$SERIAL proxies to $PROXY but has no adb reverse tunnel, so it has no network" \
-                        "Run 'device-proxy on $SERIAL' to restore it, or 'device-proxy off $SERIAL'."
+                        "Run 'device-proxy -s $SERIAL on' to restore it, or 'device-proxy -s $SERIAL off'."
                 fi
                 ;;
         esac

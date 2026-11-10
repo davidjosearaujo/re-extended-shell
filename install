@@ -6,17 +6,24 @@ set -euo pipefail
 REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 # shellcheck source=lib/rc.sh
 . "$REPO/lib/rc.sh"
+# shellcheck source=modules/core/lib.sh
+. "$REPO/modules/core/lib.sh"   # the help and error conventions every command shares
+RE_CMD=./install
 
 usage() {
     cat <<EOF
 Usage: ./install [--bash] [--zsh]
-  Adds one line to ~/.bashrc and/or ~/.zshrc that sources:
-    $MAIN
-  With no shell flag it hooks every shell that has an rc file, plus your login
-  shell (\$SHELL), creating its rc file if needed.
-  --bash  Only ~/.bashrc (on macOS also makes sure ~/.bash_profile loads it)
-  --zsh   Only \${ZDOTDIR:-\$HOME}/.zshrc
-  To remove it again: ./uninstall
+
+Adds one line to ~/.bashrc and/or ~/.zshrc that sources:
+  $MAIN
+With no shell option it hooks every shell that has an rc file, plus your login
+shell (\$SHELL), creating its rc file if needed. Safe to run again: it updates
+the line in place. To remove it: ./uninstall
+
+Options:
+  --bash      Only ~/.bashrc (on macOS also makes sure ~/.bash_profile loads it)
+  --zsh       Only \${ZDOTDIR:-\$HOME}/.zshrc
+  -h, --help  Show this help
 EOF
 }
 
@@ -25,8 +32,9 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --bash) SHELLS+=(bash); shift ;;
         --zsh)  SHELLS+=(zsh); shift ;;
-        -h|--help) usage; exit 0 ;;
-        *) echo "Error: Unknown option: $1" >&2; usage >&2; exit 1 ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
+        *)  re_unexpected_arg "$1" ;;
     esac
 done
 

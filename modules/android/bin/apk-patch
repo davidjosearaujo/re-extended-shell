@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Patch an APK for interception on unrooted devices: trust user CAs and the ZAP
-# CA (overriding certificate pins), make it debuggable, then rebuild and sign.
+# Patch an APK so its traffic can be intercepted on an unrooted device (trusts the ZAP CA).
 # shellcheck source=../lib.sh
 _re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
 while [ -L "$_re_self" ]; do
@@ -11,55 +10,57 @@ done
 
 usage() {
     cat <<EOF
-Usage: apk-patch [-o <output.apk>] [-k <keystore> [-p <ks_pass>] [-a <alias>]] [--no-debuggable] <file.apk>
-  Makes an app interceptable on a device without root:
+Usage: apk-patch [-o FILE] [-f] [--no-debuggable] [-k KEYSTORE [-p PASSWORD] [-a ALIAS]] <file.apk>
+
+Makes an app interceptable on a device without root:
   - replaces its network security config with one that trusts user-installed
-    CAs and the ZAP CA (embedded in the APK, from $RE_ZAP_CERT if present),
-    overriding any <pin-set>, and allows cleartext HTTP;
-  - sets android:debuggable="true" (unless --no-debuggable);
-  - rebuilds it with apktool, zipaligns it and signs it (debug keystore unless -k).
-  Pinning done in code (OkHttp CertificatePinner, custom TrustManagers, ...) is
-  not affected; for that use 'frida-server --ssl-unpinning' on a rooted device.
-  -o, --output FILE   Output APK (default: ./<name>_patched.apk)
-  -k, --keystore FILE Sign with this keystore (-p password, -a alias)
-  --no-debuggable     Leave android:debuggable as it is
-  For split APKs (.xapk/.apks), merge them first: xapk-merger or apk-pull --merge.
-  The patched app has a different signature: uninstall the original before
-  installing it.
+    CAs and the ZAP CA (embedded in the APK, if RE_ZAP_CERT exists), overriding
+    any <pin-set>, and allows cleartext HTTP
+  - sets android:debuggable="true" (unless --no-debuggable)
+  - rebuilds it with apktool, zipaligns it and signs it (debug keystore unless -k)
+Pinning done in code (OkHttp CertificatePinner, custom TrustManagers, ...) is
+not affected; for that use 'frida-server --ssl-unpinning' on a rooted device.
+The patched app has a different signature: uninstall the original before
+installing it. For split APKs (.xapk/.apks), merge them first: xapk-merger or
+apk-pull --merge.
+
+Options:
+  -o, --output FILE        Output APK (default: ./<name>_patched.apk)
+  -f, --force              Replace an existing output
+  --no-debuggable          Leave android:debuggable as it is
+  -k, --keystore KEYSTORE  Sign with this keystore (default: the debug keystore)
+  -p, --ks-pass PASSWORD   Its password (default: android)
+  -a, --alias ALIAS        Its key alias (default: androiddebugkey)
+  -h, --help               Show this help
 EOF
 }
 
-APK="" OUTPUT_APK="" KEYSTORE="" KS_PASS="android" KS_ALIAS="androiddebugkey" DEBUGGABLE=1
+APK="" OUTPUT_APK="" FORCE="" DEBUGGABLE=1
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        -o|--output|-k|--keystore|-p|--ks-pass|-a|--alias)
-            re_need_arg "$1" "$#"
-            case "$1" in
-                -o|--output)   OUTPUT_APK="$2" ;;
-                -k|--keystore) KEYSTORE="$2" ;;
-                -p|--ks-pass)  KS_PASS="$2" ;;
-                -a|--alias)    KS_ALIAS="$2" ;;
-            esac
-            shift 2 ;;
+        -o|--output) re_need_arg "$1" "$#"; OUTPUT_APK="$2"; shift 2 ;;
+        -k|--keystore|-p|--ks-pass|-a|--alias) re_need_arg "$1" "$#"; re_sign_opt "$1" "$2"; shift 2 ;;
+        -f|--force) FORCE=1; shift ;;
         --no-debuggable) DEBUGGABLE=""; shift ;;
-        -h|--help) usage; exit 0 ;;
-        -*) re_die "Unknown option: $1 (see apk-patch --help)" ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
         *)
             [ -z "$APK" ] || re_die "only one APK at a time."
             APK="$1"; shift ;;
     esac
 done
-[ -n "$APK" ] || { usage >&2; exit 1; }
+[ -n "$APK" ] || re_usage_error "missing <file.apk>."
 [ -f "$APK" ] || re_die "file not found: $APK"
 re_reject_bundle "$APK"
-[ -z "$KEYSTORE" ] || [ -f "$KEYSTORE" ] || re_die "keystore not found: $KEYSTORE"
-re_require apktool
-re_find_build_tool apksigner >/dev/null || re_die "'apksigner' not found (PATH or \$ANDROID_HOME/build-tools)."
-
+re_check_keystore
 if [ -z "$OUTPUT_APK" ]; then
     BASE=$(basename "$APK")
     OUTPUT_APK="$PWD/${BASE%.*}_patched.apk"
 fi
+re_refuse_existing "$FORCE" "$OUTPUT_APK"
+re_require apktool
+re_find_build_tool apksigner >/dev/null || re_die "'apksigner' not found (PATH or \$ANDROID_HOME/build-tools)."
+
 mkdir -p "$(dirname "$OUTPUT_APK")" || exit 1
 
 WORK_DIR=$(mktemp -d)
@@ -81,7 +82,7 @@ if [ -f "$RE_ZAP_CERT" ]; then
     ZAP_ANCHOR='            <certificates src="@raw/re_zap_ca" overridePins="true" />'
     echo "Embedding the ZAP CA ($RE_ZAP_CERT)."
 else
-    echo "Warning: no ZAP CA at $RE_ZAP_CERT, the app will trust user-installed CAs only."
+    re_warn "no ZAP CA at $RE_ZAP_CERT, the app will trust user-installed CAs only."
 fi
 
 mkdir -p "$SRC/res/xml"

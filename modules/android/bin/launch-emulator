@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Launch an Android emulator (or set up a connected physical device) with the
-# ZAP root CA injected as a system CA and all traffic proxied through ZAP.
+# Boot an emulator (or set up a rooted phone) with ZAP's CA injected and its traffic proxied through ZAP.
 # shellcheck source=../lib.sh
 _re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
 while [ -L "$_re_self" ]; do
@@ -11,40 +10,43 @@ done
 
 usage() {
     cat <<EOF
-Usage: launch-emulator [--clean|--wiped] [--start-frida-server|--no-frida] <AVD_NAME>
-       launch-emulator -d|--device [--start-frida-server|--no-frida] [SERIAL]
-  Boots from the '$RE_ZAP_SNAPSHOT' snapshot if it exists, otherwise does a
-  wiped boot, sets up ZAP and saves the snapshot.
-  --clean, --wiped  Wiped boot ignoring the snapshot, then replaces it with a fresh one
-  --start-frida-server
-                    Also start frida-server once it's on the device (otherwise it is
-                    only pushed; 'frida-server' starts it later).
-  --no-frida        Don't push frida-server. By default the build matching this machine's
-                    Frida is put on the device, if Frida is installed (start it with
-                    'frida-server', see its --help).
-  -d, --device      Use a connected physical device instead of an emulator.
-                    It must be rooted (userdebug build, or su via Magisk/KernelSU).
-                    Injects the CA, proxies through 'adb reverse' and opens scrcpy.
-                    SERIAL can be omitted when only one device is connected.
-  ZAP must listen on 127.0.0.1:$RE_ZAP_PORT (RE_ZAP_PORT), with its root CA
-  exported to $RE_ZAP_CERT (RE_ZAP_CERT).
+Usage: launch-emulator [--clean] [--start-frida-server | --no-frida] <AVD_NAME>
+       launch-emulator -d [-s SERIAL] [--start-frida-server | --no-frida]
+
+Boots the AVD from its '$RE_ZAP_SNAPSHOT' snapshot, or, when there is none yet,
+does a wiped boot, sets up ZAP and saves the snapshot. Setting up ZAP means:
+ZAP's root CA injected as a system CA, the global HTTP proxy pointed at ZAP,
+and frida-server pushed (if Frida is installed here).
+With -d, does the same on a rooted physical device (userdebug build, or su via
+Magisk/KernelSU), proxying through 'adb reverse' and mirroring its screen with
+scrcpy. Run release-device before unplugging it.
+ZAP must listen on 127.0.0.1:$RE_ZAP_PORT, with its root CA exported to
+$RE_ZAP_CERT.
+
+Options:
+  -d, --device          Use a connected physical device instead of an emulator
+  -s, --serial SERIAL   Physical device to use (implies -d; optional with a
+                        single device)
+  --clean               Wiped boot that ignores the snapshot, then replaces it
+  --start-frida-server  Also start frida-server (by default it's only pushed;
+                        'frida-server' starts it later)
+  --no-frida            Don't push frida-server
+  -h, --help            Show this help
 EOF
 }
 
 CLEAN="" DEVICE="" SERIAL="" AVD_NAME="" NO_FRIDA="" START_FRIDA=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --clean|--wiped) CLEAN=1; shift ;;
+        --clean) CLEAN=1; shift ;;
         --no-frida) NO_FRIDA=1; shift ;;
         --start-frida-server) START_FRIDA=1; shift ;;
-        -d|--device)
-            DEVICE=1; shift
-            # Optional serial right after the flag
-            if [ "$#" -gt 0 ] && [ "${1#-}" = "$1" ]; then SERIAL="$1"; shift; fi
-            ;;
-        -h|--help) usage; exit 0 ;;
-        -*) re_die "Unknown option: $1" ;;
-        *)  AVD_NAME="$1"; shift ;;
+        -d|--device) DEVICE=1; shift ;;
+        -s|--serial) re_need_arg "$1" "$#"; DEVICE=1; SERIAL="$2"; shift 2 ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
+        *)  [ -z "$AVD_NAME" ] || re_die "only one AVD at a time (a device serial goes after -s)."
+            AVD_NAME="$1"; shift ;;
     esac
 done
 
@@ -52,7 +54,7 @@ if [ -n "$NO_FRIDA" ] && [ -n "$START_FRIDA" ]; then
     re_die "--no-frida and --start-frida-server don't go together."
 fi
 if [ -n "$DEVICE" ] && [ -n "$AVD_NAME" ]; then
-    re_die "pass either an AVD name or -d|--device [SERIAL], not both."
+    re_die "pass either an AVD name or -d [-s SERIAL], not both (a device serial goes after -s)."
 fi
 
 re_require adb
@@ -64,8 +66,8 @@ re_prepare_cert "$WORK_DIR"
 
 ADB=()
 if [ -n "$DEVICE" ]; then
-    [ -n "$CLEAN" ] && echo "Warning: --clean has no effect on a physical device, ignoring it."
-    SERIAL=$(re_pick_device --physical "launch-emulator -d" "$SERIAL") || exit 1
+    [ -n "$CLEAN" ] && re_warn "--clean has no effect on a physical device, ignoring it."
+    SERIAL=$(re_pick_device --physical "launch-emulator -d -s" "$SERIAL") || exit 1
     MODE="device"
     ADB=(adb -s "$SERIAL")
     MODEL=$("${ADB[@]}" shell getprop ro.product.model 2>/dev/null | tr -d '\r')
@@ -73,16 +75,13 @@ if [ -n "$DEVICE" ]; then
 else
     re_require emulator
     if [ -z "$AVD_NAME" ]; then
-        echo "Error: Please specify an AVD name, or -d|--device for a physical device."
-        usage
-        echo "Available AVDs:"
-        emulator -list-avds
+        AVDS=$(emulator -list-avds 2>/dev/null)
         PHYS=$(re_adb_devices --physical)
-        if [ -n "$PHYS" ]; then
-            echo "Connected physical devices:"
-            sed 's/^/  /' <<<"$PHYS"
-        fi
-        exit 1
+        re_usage_error "missing <AVD_NAME>, or -d for a physical device." \
+            "${AVDS:+AVDs:
+$(sed 's/^/  /' <<<"$AVDS")}${AVDS:+${PHYS:+
+}}${PHYS:+Connected physical devices:
+$(sed 's/^/  /' <<<"$PHYS")}"
     fi
 
     AVD_DIR=$(re_avd_dir "$AVD_NAME") || re_die "no AVD named '$AVD_NAME' (see 'emulator -list-avds')."
@@ -149,7 +148,7 @@ echo "Pushing certificate ($RE_CERT_HASH.0) and CA injection script..."
 
 echo "Executing CA injection script..."
 re_root_shell "$SERIAL" "$ROOT" "$RE_DEVICE_DIR/inject_ca.sh $RE_DEVICE_DIR/$RE_CERT_HASH.0" \
-    || re_die "CA injection failed."
+    || re_die "the CA injection failed."
 
 # A physical device gets the port tunnelled back to ZAP over adb reverse
 [ "$MODE" != "device" ] || echo "Forwarding device port $RE_ZAP_PORT to this machine's ZAP (adb reverse)..."
@@ -168,7 +167,7 @@ if [ -z "$NO_FRIDA" ]; then
         if "$FRIDA_SERVER" -s "$SERIAL" --push-only; then
             FRIDA_OK=1
         else
-            echo "Warning: could not push frida-server, see above. Retry with: frida-server -s $SERIAL"
+            re_warn "could not push frida-server, see above. Retry with: frida-server -s $SERIAL"
         fi
     else
         echo "Frida not found on this machine, not pushing frida-server (pip install frida-tools, or pass --no-frida to silence this)."
@@ -180,12 +179,12 @@ if [ "$MODE" = "create" ] || [ "$MODE" = "clean" ]; then
     if re_emu_snapshot "$SERIAL" save "$RE_ZAP_SNAPSHOT"; then
         echo "Snapshot '$RE_ZAP_SNAPSHOT' saved. Next launches will boot from it."
     else
-        echo "Warning: failed to save snapshot '$RE_ZAP_SNAPSHOT'."
+        re_warn "failed to save snapshot '$RE_ZAP_SNAPSHOT'."
     fi
 fi
 
 if [ -n "$START_FRIDA" ] && [ -n "$FRIDA_OK" ]; then
-    "$FRIDA_SERVER" -s "$SERIAL" || echo "Warning: frida-server did not start, see above. Retry with: frida-server -s $SERIAL"
+    "$FRIDA_SERVER" -s "$SERIAL" || re_warn "frida-server did not start, see above. Retry with: frida-server -s $SERIAL"
 fi
 
 if [ "$MODE" = "device" ]; then
@@ -195,11 +194,11 @@ if [ "$MODE" = "device" ]; then
         scrcpy -s "$SERIAL" --window-title "${MODEL:-$SERIAL} ($SERIAL)" </dev/null >"$SCRCPY_LOG" 2>&1 &
         disown
     else
-        echo "Warning: scrcpy not found, skipping screen mirroring (https://github.com/Genymobile/scrcpy)."
+        re_warn "scrcpy not found, skipping screen mirroring (https://github.com/Genymobile/scrcpy)."
     fi
-    echo "Environment ready on $SERIAL! OWASP ZAP Proxy active on $PROXY (via adb reverse)."
+    echo "$SERIAL is ready: its traffic goes to ZAP via $PROXY (adb reverse)."
     echo "The CA lasts until the device reboots. The proxy setting persists and breaks the device's"
-    echo "network once adb disconnects, so run 'release-device $SERIAL' before unplugging it."
+    echo "network once adb disconnects, so run 'release-device -s $SERIAL' before unplugging it."
 else
-    echo "Environment ready on $SERIAL! OWASP ZAP Proxy active on $PROXY."
+    echo "$SERIAL is ready: its traffic goes to ZAP via $PROXY."
 fi

@@ -42,10 +42,10 @@ _re_packages() {
 _re_complete_launch_emulator() {
     local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
     case "$prev" in
-        -d|--device) _re_reply_words "$(_re_serials --physical)"; return ;;
+        -s|--serial) _re_reply_words "$(_re_serials --physical)"; return ;;
     esac
     if [[ "$cur" == -* ]]; then
-        _re_reply_words "--clean --wiped --start-frida-server --no-frida -d --device -h --help"
+        _re_reply_words "--clean --start-frida-server --no-frida -d --device -s --serial -h --help"
     else
         _re_reply_words "$(_re_avds)"
     fi
@@ -62,35 +62,37 @@ _re_complete_kill_emulator() {
 
 _re_complete_reset_emulator() {
     local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
-    [ "$prev" = "--snapshot" ] && { COMPREPLY=(); return; }
-    if [[ "$cur" == -* ]]; then
-        _re_reply_words "--save --snapshot -h --help"
-    else
-        _re_reply_words "$(_re_serials) $(_re_avds)"
-    fi
+    case "$prev" in
+        -s|--serial) _re_reply_words "$(_re_serials | grep '^emulator-')"; return ;;
+        -n|--name)   _re_reply_words "$(_re_avds)"; return ;;
+        --snapshot)  COMPREPLY=(); return ;;
+    esac
+    _re_reply_words "-s --serial -n --name --save --snapshot -h --help"
 }
 
 _re_complete_device_proxy() {
-    local cur=${COMP_WORDS[COMP_CWORD]} i seen=""
+    local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]} i seen=""
+    case "$prev" in
+        -s|--serial) _re_reply_words "$(_re_serials)"; return ;;
+    esac
     for ((i = 1; i < COMP_CWORD; i++)); do
         case "${COMP_WORDS[i]}" in on|off|status) seen=1 ;; esac
     done
     if [[ "$cur" == -* ]]; then
-        _re_reply_words "-h --help"
+        _re_reply_words "-s --serial -h --help"
     elif [ -z "$seen" ]; then
         _re_reply_words "on off status"
     else
-        _re_reply_words "$(_re_serials)"
+        COMPREPLY=()
     fi
 }
 
 _re_complete_release_device() {
-    local cur=${COMP_WORDS[COMP_CWORD]}
-    if [[ "$cur" == -* ]]; then
-        _re_reply_words "--reboot -h --help"
-    else
-        _re_reply_words "$(_re_serials --physical)"
-    fi
+    local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
+    case "$prev" in
+        -s|--serial) _re_reply_words "$(_re_serials --physical)"; return ;;
+    esac
+    _re_reply_words "-s --serial --reboot -h --help"
 }
 
 _re_complete_wireshark() {
@@ -124,7 +126,7 @@ _re_complete_xapk_merger() {
         -p|--ks-pass|-a|--alias) COMPREPLY=(); return ;;
     esac
     if [[ "$cur" == -* ]]; then
-        _re_reply_words "-o --output -k --keystore -p --ks-pass -a --alias -j --jar --no-obb --provision -h --help"
+        _re_reply_words "-o --output -f --force -k --keystore -p --ks-pass -a --alias -j --jar --no-obb --provision -h --help"
     else
         _re_reply_files "xapk|zip|apks"
     fi
@@ -148,10 +150,13 @@ _re_complete_frida_server() {
 _re_complete_apk_pull() {
     local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
     case "$prev" in
-        -s|--serial) _re_reply_words "$(_re_serials)"; return ;;
+        -s|--serial)   _re_reply_words "$(_re_serials)"; return ;;
+        -o|--output)   _re_reply_files "apk"; return ;;
+        -k|--keystore) _re_reply_files ""; return ;;
+        -p|--ks-pass|-a|--alias) COMPREPLY=(); return ;;
     esac
     if [[ "$cur" == -* ]]; then
-        _re_reply_words "-s --serial --merge -f --force -h --help"
+        _re_reply_words "-s --serial -o --output -f --force --merge -k --keystore -p --ks-pass -a --alias -h --help"
     else
         _re_reply_words "$(_re_packages)"
     fi
@@ -177,7 +182,7 @@ _re_complete_apk_patch() {
         -p|--ks-pass|-a|--alias) COMPREPLY=(); return ;;
     esac
     if [[ "$cur" == -* ]]; then
-        _re_reply_words "-o --output -k --keystore -p --ks-pass -a --alias --no-debuggable -h --help"
+        _re_reply_words "-o --output -f --force -k --keystore -p --ks-pass -a --alias --no-debuggable -h --help"
     else
         _re_reply_files "apk"
     fi

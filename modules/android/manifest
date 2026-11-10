@@ -1,0 +1,15 @@
+# What the android module is, and its settings.
+# Read by re-extended-shell and by every command's --help (see core/lib.sh).
+#   about: one line saying what the module is for
+#   setting: NAME | default | what it does | commands that use it
+about: Emulators and rooted phones with ZAP's CA injected, Frida with SSL unpinning, and APK tooling.
+setting: ANDROID_HOME | the SDK in the default Android Studio location | Android SDK | launch-emulator kill-emulator reset-emulator apk-patch xapk-merger re-doctor
+setting: ANDROID_NDK_HOME | the newest NDK in $ANDROID_HOME/ndk | Android NDK, for your own builds |
+setting: RE_ZAP_SNAPSHOT | zap-ready | Emulator snapshot with ZAP set up, that launch-emulator boots from | launch-emulator reset-emulator re-doctor
+setting: RE_CONTAINER_ENGINE | podman, else docker | Container engine for androidcontainer | androidcontainer re-doctor
+setting: RE_ANDROID_CONTAINER_IMAGE | us-docker.pkg.dev/android-emulator-268719/images/30-google-x64 | Emulator container image | androidcontainer
+setting: APKEDITOR_JAR | apkeditor on PATH, else a downloaded jar | APKEditor jar that merges split APKs | xapk-merger apk-pull re-doctor
+setting: JADX | jadx | Command that runs jadx; may carry arguments, e.g. 'flatpak run com.github.skylot.jadx' | apk-decompile re-doctor
+setting: JADX_GUI | jadx-gui | Command that runs jadx-gui, suggested to browse the output | apk-decompile
+setting: RE_FRIDA_UNPIN_SCRIPTS | the five HTTP Toolkit scripts listed in the README | Unpinning scripts --ssl-unpinning loads, in order | frida-server
+setting: RE_FRIDA_UNPIN_REF | main | Git ref of HTTP Toolkit's unpinning scripts to download | frida-server

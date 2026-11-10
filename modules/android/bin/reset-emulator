@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Put a running emulator back to a saved snapshot, or save its state as one,
-# without restarting it.
+# Put a running emulator back to a saved snapshot, or save its state as one, without restarting it.
 # shellcheck source=../lib.sh
 _re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
 while [ -L "$_re_self" ]; do
@@ -11,31 +10,41 @@ done
 
 usage() {
     cat <<EOF
-Usage: reset-emulator [--snapshot NAME] [SERIAL|AVD_NAME]
-       reset-emulator --save [--snapshot NAME] [SERIAL|AVD_NAME]
-  Loads a snapshot into a running emulator (adb emu avd snapshot load) and waits
-  until it's usable again. Everything since the snapshot is dropped: installed
-  apps, app data, the proxy setting. The CA and frida-server are back as they
-  were when the snapshot was saved.
-  --save            Instead, save the emulator's current state as the snapshot
-                    (replacing it): set up the app under test once, then come back
-                    to that state with every reset.
-  --snapshot NAME   Snapshot to use (default: '$RE_ZAP_SNAPSHOT', RE_ZAP_SNAPSHOT). That is the
-                    one launch-emulator boots from, so --save without --snapshot
-                    changes where future launches start. Other names keep extra states.
-  With one emulator running it's picked for you; with several, name it by serial
-  (emulator-5554) or by AVD name.
+Usage: reset-emulator [-s SERIAL | -n AVD_NAME] [--snapshot NAME]
+       reset-emulator [-s SERIAL | -n AVD_NAME] --save [--snapshot NAME]
+
+Loads a snapshot into a running emulator (adb emu avd snapshot load) and waits
+until it's usable again. Everything since the snapshot is dropped: installed
+apps, app data, the proxy setting. The CA and frida-server are back as they
+were when the snapshot was saved.
+With --save, saves the emulator's current state as the snapshot instead: set up
+the app under test once, then come back to that state with every reset.
+
+Options:
+  -s, --serial SERIAL  Emulator to use, by adb serial (optional with a single
+                       emulator)
+  -n, --name AVD_NAME  Emulator to use, by AVD name
+  --save               Save the current state as the snapshot, replacing it
+  --snapshot NAME      Snapshot to use (default: '$RE_ZAP_SNAPSHOT', the one
+                       launch-emulator boots from, so --save without --snapshot
+                       changes where future launches start)
+  -h, --help           Show this help
 EOF
 }
 
-TARGET="" SNAP="$RE_ZAP_SNAPSHOT" SAVE=""
+TARGET="" FIELD="" SNAP="$RE_ZAP_SNAPSHOT" SAVE=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        -h|--help) usage; exit 0 ;;
+        -h|--help) re_help; exit 0 ;;
+        -s|--serial|-n|--name)
+            re_need_arg "$1" "$#"
+            [ -z "$TARGET" ] || re_die "pass only one of -s SERIAL or -n AVD_NAME."
+            case "$1" in -s|--serial) FIELD=1 ;; *) FIELD=2 ;; esac
+            TARGET="$2"; shift 2 ;;
         --save) SAVE=1; shift ;;
         --snapshot) re_need_arg "$1" "$#"; SNAP="$2"; shift 2 ;;
-        -*) re_die "Unknown option: $1" ;;
-        *)  [ -z "$TARGET" ] || re_die "Only one emulator at a time."; TARGET="$1"; shift ;;
+        -*) re_unknown_option "$1" ;;
+        *)  re_unexpected_arg "$1" "name the emulator with -s SERIAL or -n AVD_NAME" ;;
     esac
 done
 case "$SNAP" in
@@ -49,13 +58,13 @@ RUNNING=$(re_running_emulators)
 
 if [ -z "$TARGET" ]; then
     if [ "$(wc -l <<<"$RUNNING")" -gt 1 ]; then
-        echo "Error: several emulators running, pick one with: reset-emulator <SERIAL|AVD_NAME>" >&2
+        echo "Error: several emulators running, pick one with: reset-emulator -s SERIAL (or -n AVD_NAME)" >&2
         sed 's/^/  /' <<<"$RUNNING" >&2
         exit 1
     fi
     LINE=$RUNNING
 else
-    LINE=$(awk -v t="$TARGET" '$1 == t || $2 == t { print; exit }' <<<"$RUNNING")
+    LINE=$(awk -v t="$TARGET" -v f="$FIELD" '$f == t { print; exit }' <<<"$RUNNING")
     if [ -z "$LINE" ]; then
         echo "Error: no running emulator matches '$TARGET'. Running emulators:" >&2
         sed 's/^/  /' <<<"$RUNNING" >&2
@@ -68,7 +77,7 @@ NAME=${LINE#* }
 if [ -n "$SAVE" ]; then
     echo "Saving the current state of $NAME ($SERIAL) as snapshot '$SNAP'..."
     re_emu_snapshot "$SERIAL" save "$SNAP" || re_die "the emulator didn't save the snapshot (its reply is above)."
-    echo "Snapshot '$SNAP' saved. Restore it with: reset-emulator --snapshot $SNAP $SERIAL"
+    echo "Snapshot '$SNAP' saved. Restore it with: reset-emulator -s $SERIAL --snapshot $SNAP"
     exit 0
 fi
 
@@ -79,7 +88,7 @@ if AVD_DIR=$(re_avd_dir "$NAME") && [ ! -d "$AVD_DIR/snapshots/$SNAP" ]; then
     if [ "$SNAP" = "$RE_ZAP_SNAPSHOT" ]; then
         echo "Restart it so one gets saved:  kill-emulator $NAME  &&  launch-emulator $NAME" >&2
     else
-        echo "Save it first with:  reset-emulator --save --snapshot $SNAP $SERIAL" >&2
+        echo "Save it first with:  reset-emulator -s $SERIAL --save --snapshot $SNAP" >&2
     fi
     exit 1
 fi

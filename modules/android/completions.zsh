@@ -31,10 +31,11 @@ _re_packages() {
 _re_launch_emulator() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
-        '(--clean --wiped -d --device)'{--clean,--wiped}'[wiped boot, rebuilding the snapshot]' \
+        '(--clean -d --device -s --serial)--clean[wiped boot, rebuilding the snapshot]' \
         '(--no-frida)--start-frida-server[also start frida-server]' \
         '(--start-frida-server)--no-frida[do not push frida-server]' \
-        '(--clean --wiped -d --device 1)'{-d,--device}'[use a connected physical device]::device serial:_re_serials --physical' \
+        '(--clean 1)'{-d,--device}'[use a connected physical device]' \
+        '(--clean -s --serial 1)'{-s,--serial}'[physical device to use (implies -d)]:device serial:_re_serials --physical' \
         '1:AVD name:_re_avds'
 }
 
@@ -48,23 +49,24 @@ _re_kill_emulator() {
 _re_device_proxy() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
-        '1:action:(on off status)' \
-        '2:device serial:_re_serials'
+        '(-s --serial)'{-s,--serial}'[device to use]:device serial:_re_serials' \
+        '1:action:(on off status)'
 }
 
 _re_reset_emulator() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
+        '(-s --serial -n --name)'{-s,--serial}'[emulator to use, by serial]:emulator serial:_re_serials' \
+        '(-s --serial -n --name)'{-n,--name}'[emulator to use, by AVD name]:AVD name:_re_avds' \
         '--save[save the current state as the snapshot]' \
-        '--snapshot[snapshot to use]:snapshot name: ' \
-        '1:emulator:_alternative "serials:emulator serial:_re_serials" "avds:AVD name:_re_avds"'
+        '--snapshot[snapshot to use]:snapshot name: '
 }
 
 _re_release_device() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
-        '--reboot[also reboot, dropping the injected CA]' \
-        '1:device serial:_re_serials --physical'
+        '(-s --serial)'{-s,--serial}'[device to release]:device serial:_re_serials --physical' \
+        '--reboot[also reboot, dropping the injected CA]'
 }
 
 _re_wireshark() {
@@ -86,6 +88,7 @@ _re_xapk_merger() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
         '(-o --output)'{-o,--output}'[output APK]:output APK:_files -g "*.(#i)apk(-.)"' \
+        '(-f --force)'{-f,--force}'[replace an existing output]' \
         '(-k --keystore)'{-k,--keystore}'[keystore to sign with]:keystore:_files' \
         '(-p --ks-pass)'{-p,--ks-pass}'[keystore password]:password: ' \
         '(-a --alias)'{-a,--alias}'[key alias]:alias: ' \
@@ -114,8 +117,12 @@ _re_apk_pull() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
         '(-s --serial)'{-s,--serial}'[device to pull from]:device serial:_re_serials' \
-        '--merge[save a single merged APK]' \
+        '(-o --output)'{-o,--output}'[output directory, or APK with --merge]:output:_files' \
         '(-f --force)'{-f,--force}'[replace an existing output]' \
+        '--merge[save a single merged APK]' \
+        '(-k --keystore)'{-k,--keystore}'[with --merge, keystore to sign with]:keystore:_files' \
+        '(-p --ks-pass)'{-p,--ks-pass}'[keystore password]:password: ' \
+        '(-a --alias)'{-a,--alias}'[key alias]:alias: ' \
         '1:package:_re_packages'
 }
 
@@ -134,6 +141,7 @@ _re_apk_patch() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
         '(-o --output)'{-o,--output}'[output APK]:output APK:_files -g "*.(#i)apk(-.)"' \
+        '(-f --force)'{-f,--force}'[replace an existing output]' \
         '(-k --keystore)'{-k,--keystore}'[keystore to sign with]:keystore:_files' \
         '(-p --ks-pass)'{-p,--ks-pass}'[keystore password]:password: ' \
         '(-a --alias)'{-a,--alias}'[key alias]:alias: ' \

@@ -15,6 +15,26 @@ RE_DEVICE_DIR="/data/local/tmp/re-ext"   # where files get pushed on the device
 # shellcheck disable=SC2034  # used by the scripts that source this file
 RE_APKEDITOR_DL="$RE_DATA_DIR/apkeditor/APKEditor.jar"   # xapk-merger's download
 
+# Signing options of the commands that re-sign an APK: -k/-p/-a set these
+# (use re_sign_opt in the option loop), the defaults mean the debug keystore.
+# shellcheck disable=SC2034  # used by the scripts that source this file
+KEYSTORE="" KS_PASS="android" KS_ALIAS="androiddebugkey" RE_SIGN_GIVEN=""
+
+# Usage: -k|--keystore|-p|--ks-pass|-a|--alias) re_need_arg "$1" "$#"; re_sign_opt "$1" "$2"; shift 2 ;;
+re_sign_opt() {
+    RE_SIGN_GIVEN=1
+    case "$1" in
+        -k|--keystore) KEYSTORE="$2" ;;
+        -p|--ks-pass)  KS_PASS="$2" ;;
+        -a|--alias)    KS_ALIAS="$2" ;;
+    esac
+}
+
+# Dies if -k named a keystore that doesn't exist
+re_check_keystore() {
+    [ -z "$KEYSTORE" ] || [ -f "$KEYSTORE" ] || re_die "keystore not found: $KEYSTORE"
+}
+
 # Serials of connected, authorised devices. --physical skips emulators.
 re_adb_devices() {
     if [ "${1:-}" = "--physical" ]; then
@@ -247,10 +267,10 @@ re_sign_apk() {
         if "$ZIPALIGN" -p -f 4 "$IN" "$ALIGNED"; then
             TO_SIGN="$ALIGNED"
         else
-            echo "Warning: zipalign failed, signing unaligned APK."
+            re_warn "zipalign failed, signing unaligned APK."
         fi
     else
-        echo "Warning: 'zipalign' not found, skipping alignment."
+        re_warn "'zipalign' not found, skipping alignment."
     fi
 
     if [ -z "$KEYSTORE" ]; then
@@ -280,7 +300,7 @@ re_sign_apk() {
     if "$APKSIGNER" verify "$OUT" >/dev/null 2>&1; then
         echo "Signature verified."
     else
-        echo "Warning: apksigner verify reported problems."
+        re_warn "apksigner verify reported problems."
     fi
 }
 

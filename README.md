@@ -15,7 +15,8 @@ git-ignored `local/` folder, so updates never conflict with them.
   CA (Android 14+ included), Frida with SSL unpinning, pulling, decompiling and
   patching APKs, split APK/XAPK handling, per-app logs and live traffic capture.
 - [Binary](#binary): a first look at native executables and libraries (ELF, Mach-O, PE).
-- [Core](#core): what every module shares, and `re-doctor`, which checks your setup.
+- [Core](#core): what every module shares, `re-doctor`, which checks your setup, and
+  `re-extended-shell`, which shows everything that's installed.
 
 More modules will follow. See [Adding a module](#adding-a-module).
 
@@ -58,7 +59,20 @@ Then export ZAP's root CA certificate to `certs/zap_root_ca.cer`, either from
 `zap.sh -cmd -certpubdump certs/zap_root_ca.cer`. PEM and DER both work. Each module
 converts it to whatever format its targets expect.
 
-Finally, run `re-doctor` to check that everything is in place.
+Finally, run `re-doctor` to check that everything is in place, and
+`re-extended-shell` to see everything it installed.
+
+### Using the commands
+
+Every command works the same way, so once you know one you know them all:
+
+- `<command> --help` shows its usage, options, the settings it reads (with their
+  current value) and examples. `re-extended-shell --commands` lists every command.
+- A device is picked with `-s SERIAL` and a running emulator with `-n AVD_NAME`; with a
+  single device connected, neither is needed.
+- `-o` sets where output goes, and nothing is overwritten without `-f`.
+- Errors start with `Error:`, warnings with `Warning:`, and both go to stderr. A
+  mistyped option says so and points to `--help`.
 
 ## Configuration
 
@@ -120,6 +134,7 @@ template, delete your `local/env.sh` and run `./install`.
 | Command | What it does |
 | --- | --- |
 | `re-doctor [MODULE...]` | Checks the shell hook and PATH, the ZAP certificate (format, expiry) and whether ZAP is listening, then each module's tools, emulators and connected devices, and says how to fix what's missing. Read-only. Exits non-zero if something required is missing. |
+| `re-extended-shell` | Shows what's installed: the modules, every command with what it does, the settings with their value and where it comes from (`local/env.sh`, your environment, detected, or the default), the PATH entries the modules add, your aliases and functions, and the downloads and caches. `--modules`, `--commands`, `--envs`, `--paths`, `--aliases`, `--functions` and `--data` show one section each (combine them freely), `-m MODULE` narrows it to a module, `--version` prints the version. It flags what this shell is missing, e.g. a setting changed in `local/env.sh` since the shell started. |
 
 Settings shared by every module (set them in `local/env.sh`, see [Configuration](#configuration)):
 
@@ -136,21 +151,21 @@ Settings shared by every module (set them in `local/env.sh`, see [Configuration]
 | Command | What it does |
 | --- | --- |
 | `launch-emulator <AVD>` | Boots the AVD, injects the ZAP CA as a system CA and sets the global HTTP proxy to ZAP. The first boot saves a `zap-ready` snapshot, so later boots take seconds. `--clean` does a wiped boot that ignores the old snapshot and replaces it with a fresh one. Also pushes the matching frida-server build to the device (without starting it) when Frida is installed; `--start-frida-server` starts it too, `--no-frida` skips the push. |
-| `launch-emulator -d [SERIAL]` | Same setup on a rooted physical device (userdebug build, or `su` via Magisk/KernelSU). Routes the proxy through `adb reverse`, opens [scrcpy](https://github.com/Genymobile/scrcpy) and pushes frida-server the same way. |
-| `release-device [--reboot] [SERIAL]` | Undoes `launch-emulator -d`: clears the proxy, removes the tunnel, stops frida-server, deletes the pushed files and closes scrcpy. Run it before unplugging the phone, or its network stops working. |
+| `launch-emulator -d [-s SERIAL]` | Same setup on a rooted physical device (userdebug build, or `su` via Magisk/KernelSU). `-s` picks the phone when several are connected (and implies `-d`). Routes the proxy through `adb reverse`, opens [scrcpy](https://github.com/Genymobile/scrcpy) and pushes frida-server the same way. |
+| `release-device [-s SERIAL] [--reboot]` | Undoes `launch-emulator -d`: clears the proxy, removes the tunnel, stops frida-server, deletes the pushed files and closes scrcpy. Run it before unplugging the phone, or its network stops working. |
 | `kill-emulator [-f] <AVD>` | Shuts an emulator down cleanly by AVD name, killing it only if it won't exit. |
-| `reset-emulator [SERIAL\|AVD]` | Puts a running emulator back to its `zap-ready` snapshot without restarting it (a few seconds), dropping everything since: installed apps, app data, proxy changes. With one emulator running it's picked automatically; with several, name it by serial or AVD name. |
-| `reset-emulator --save [SERIAL\|AVD]` | Saves the emulator's current state as the snapshot instead, so you can set up the app under test once and come back to it. `--snapshot NAME` (on either form) uses another snapshot, so you can keep several states. `--save` alone replaces the `zap-ready` one that `launch-emulator` boots from. |
-| `device-proxy on\|off\|status [SERIAL]` | Turns the ZAP proxy on or off on a running emulator or device without restarting it (for a physical device, the `adb reverse` tunnel too). `release-device` does the same and more when you unplug a phone. |
+| `reset-emulator [-s SERIAL \| -n AVD]` | Puts a running emulator back to its `zap-ready` snapshot without restarting it (a few seconds), dropping everything since: installed apps, app data, proxy changes. With one emulator running it's picked automatically; with several, name it with `-s` (serial) or `-n` (AVD name). |
+| `reset-emulator --save [-s SERIAL \| -n AVD]` | Saves the emulator's current state as the snapshot instead, so you can set up the app under test once and come back to it. `--snapshot NAME` (on either form) uses another snapshot, so you can keep several states. `--save` alone replaces the `zap-ready` one that `launch-emulator` boots from. |
+| `device-proxy [-s SERIAL] on\|off\|status` | Turns the ZAP proxy on or off on a running emulator or device without restarting it (for a physical device, the `adb reverse` tunnel too). `release-device` does the same and more when you unplug a phone. |
 | `frida-server [-s SERIAL]` | Downloads the frida-server build that matches your `frida --version` and the device's CPU, pushes it and starts it as root. Does nothing if that version already runs. `--push-only` stops after the push, `--stop` kills it, `--refresh` downloads again. |
 | `frida-server --ssl-unpinning <PKG>` | Then spawns the app under Frida with [HTTP Toolkit's unpinning scripts](https://github.com/httptoolkit/frida-interception-and-unpinning): it trusts the ZAP CA despite certificate pinning, and is forced through the same proxy `launch-emulator` sets. `-l script.js` loads your own scripts too. |
-| `apk-pull [-s SERIAL] <PKG>` | Pulls every APK of an installed app (base + splits) into `./<PKG>-splits/`. With `--merge`, saves a single installable `./<PKG>.apk` instead (merged with `xapk-merger` when the app has splits). |
+| `apk-pull [-s SERIAL] <PKG>` | Pulls every APK of an installed app (base + splits) into `./<PKG>-splits/`. With `--merge`, saves a single installable `./<PKG>.apk` instead (merged with `xapk-merger` when the app has splits; `-k/-p/-a` sign it with your own keystore). `-o` sets the output, `-f` replaces an existing one. |
 | `apk-decompile <file.apk>` | Decompiles into `./<name>/jadx/` (Java, with [jadx](https://github.com/skylot/jadx)) and `./<name>/apktool/` (smali, manifest and resources, with [apktool](https://apktool.org)), running whichever is installed. |
-| `apk-patch <file.apk>` | For phones you can't root: makes the app trust user CAs and the ZAP CA (embedded in the APK), overriding `<pin-set>`s, allows cleartext, sets `debuggable`, then rebuilds and signs it. |
+| `apk-patch <file.apk>` | For phones you can't root: makes the app trust user CAs and the ZAP CA (embedded in the APK), overriding `<pin-set>`s, allows cleartext, sets `debuggable`, then rebuilds and signs it. `-o` sets the output, `-f` replaces an existing one. |
 | `applog [-s SERIAL] [--start] <PKG>` | `logcat` for that app's process only. Waits for it to start and follows it across restarts. `--start` (re)launches it; arguments after `--` go to logcat. |
 | `launch-emulator-wireshark [-s SERIAL] [-i IFACE]` | Streams `tcpdump` from the device into a local Wireshark window. |
 | `xapk-installer [-s SERIAL \| -n AVD] <file.xapk>` | Installs every split in an XAPK/ZIP bundle with `adb install-multiple` and pushes any OBB data. |
-| `xapk-merger [options] <file.xapk\|.apks\|dir>` | Merges the splits (of a bundle, or a directory of APKs) into one installable APK with [APKEditor](https://github.com/REAndroid/APKEditor), downloaded on first use. Then zipaligns it and signs it with the debug keystore or your own (`-k`). `xapk-merger --provision` downloads APKEditor ahead of time, or updates it to the latest release. |
+| `xapk-merger [options] <file.xapk\|.apks\|dir>` | Merges the splits (of a bundle, or a directory of APKs) into one installable APK with [APKEditor](https://github.com/REAndroid/APKEditor), downloaded on first use. Then zipaligns it and signs it with the debug keystore or your own (`-k`). Like the other commands that write files, it won't replace an existing output without `-f`. `xapk-merger --provision` downloads APKEditor ahead of time, or updates it to the latest release. |
 | `androidcontainer` | Runs Google's Android emulator container (podman or docker) and connects adb to it as root. Linux only, it needs KVM. |
 
 Every command takes `-h`/`--help`, and all of them have tab completion in bash and zsh,
@@ -325,12 +340,13 @@ missing value is an error instead of an endless loop.
 
 ## Adding a module
 
-A module is a folder in `modules/`, picked up automatically. Every file in it is
-optional. For a module called `ios`:
+A module is a folder in `modules/`, picked up automatically. Every file in it but
+`manifest` is optional. For a module called `ios`:
 
 | File | Purpose |
 | --- | --- |
-| `bin/<command>` | Each command, a bash script that sources `../lib.sh`. Copy the first lines of an existing command to get the self-locating `source` line. |
+| `manifest` | Required. An `about:` line saying what the module is for, and a `setting: NAME \| default \| what it does \| commands that use it` line per setting its commands read. `re-extended-shell` and every command's `--help` read it. |
+| `bin/<command>` | Each command, a bash script that sources `../lib.sh`. Line 2 is a one-line summary (`# Do this to that.`), which `re-extended-shell --commands` shows. Copy the first lines of an existing command to get the self-locating `source` line. |
 | `lib.sh` | Helpers and settings defaults for the module's commands. Sources `../core/lib.sh` first. Put downloads and caches under `$RE_DATA_DIR/ios/`. |
 | `env.sh`, `paths.sh` | Environment and PATH for your interactive shell: SDK detection and `re_path_append` for its tools. Not for user settings. |
 | `functions.sh`, `aliases.sh` | Shell functions and aliases. |
@@ -338,6 +354,48 @@ optional. For a module called `ios`:
 | `doctor.sh` | Checks for `re-doctor`, with its `doc_ok`, `doc_warn`, `doc_fail`, `doc_info` and `doc_tool` helpers. |
 | `purge.sh` | Calls `re_purge <path> [label]` for each file or folder its commands leave outside the repo (except under `$RE_DATA_DIR`, which core already covers). |
 | `README.md` (the main one) | A section with the module's commands, requirements and settings, plus a line under **Modules**. |
+
+The commands are one family: they look and behave the same, so whoever knows one
+knows them all. A new command must follow these conventions.
+
+**Options**
+
+- Every option has a long form; common ones have a short form too.
+- A device is chosen with `-s, --serial SERIAL` and a running emulator by AVD name
+  with `-n, --name AVD_NAME`, never by a bare argument. Either can be left out when
+  only one device is connected.
+- `-o, --output` sets where output goes. A command never replaces an existing output
+  unless given `-f, --force`. Signing takes `-k, --keystore`, `-p, --ks-pass`,
+  `-a, --alias`. A switch that turns something off is `--no-<thing>`.
+
+**Help**: `usage()` prints these parts, in this order, separated by blank lines:
+
+1. `Usage: <command> ...` (more forms on lines starting with 7 spaces). Option values
+   are UPPERCASE (`-o FILE`), required operands in angle brackets (`<file.apk>`),
+   alternatives as `[-a | -b]`.
+2. A description, flush left, wrapped at 80 columns.
+3. Optionally `Actions:`, `Arguments:` or `Output:`, two-space indented lists.
+4. `Options:`, one line per option in the order device, output, `-f`, the command's
+   own, signing, and last `-h, --help  Show this help`. Descriptions start in one
+   column, and so do their continuation lines. Defaults read `(default: X)`.
+5. Optionally `Examples:`, as `  command   # what it does`.
+
+`-h|--help) re_help; exit 0 ;;` prints that, then a `Settings:` section built from the
+manifests and the footer every command shares.
+
+**Errors and messages** (helpers in `modules/core/lib.sh`)
+
+- `re_die "..."` prints `Error: ...`, `re_warn "..."` prints `Warning: ...`, both on
+  stderr and starting lowercase.
+- The option loop ends with `-*) re_unknown_option "$1" ;;` and, for arguments it
+  doesn't take, `*) re_unexpected_arg "$1" ;;`. Options that take a value check for it
+  with `re_need_arg`.
+- A command that writes a file or folder calls `re_refuse_existing "$FORCE" PATH` before
+  touching it. Signing options go through `re_sign_opt` and `re_check_keystore`.
+- A missing operand is `re_usage_error "missing <file.apk>."`: the error, the Usage
+  line and a pointer to `--help`.
+- Progress lines end with `...`; the last line says what was done and where the result
+  is (`Merged APK: ./app_merged.apk`). No message ends with `!`.
 
 ## Notes
 
