@@ -28,7 +28,7 @@ mv "$FAKE_STATE/reverse.PHONE123" "$T_DIR/reverse.saved"
 RE_ZAP_PORT=8081 run device-proxy status
 expect_out "no adb reverse tunnel" "status warns when the tunnel is gone"
 mv "$T_DIR/reverse.saved" "$FAKE_STATE/reverse.PHONE123"
-RE_ZAP_PORT=8081 run device-proxy off PHONE123
+RE_ZAP_PORT=8081 run device-proxy -s PHONE123 off
 expect_log "reverse --remove tcp:8081" "off removes the tunnel"
 RE_ZAP_PORT=8081 run device-proxy status
 expect_out "no proxy set" "status after off, physical"
@@ -36,10 +36,15 @@ expect_out "no proxy set" "status after off, physical"
 fake_reset; fake_device PHONE123; fake_emulator emulator-5554 TestAvd_A
 run device-proxy on
 expect_rc 1 "several devices and no serial is an error"
-run device-proxy on PHONE123
-expect_rc 0 "serial picks the device"
+run device-proxy on -s PHONE123
+expect_rc 0 "-s picks the device"
 expect_no_log "-s emulator-5554 shell settings put" "...and only that one"
-run device-proxy on nope
+run device-proxy --serial emulator-5554 status
+expect_rc 0 "--serial works before the action"
+run device-proxy on -s nope
 expect_rc 1 "unknown serial is an error"
+run device-proxy on PHONE123
+expect_rc 1 "a bare serial is refused"
+expect_out "-s SERIAL" "...pointing to -s"
 
 done_testing

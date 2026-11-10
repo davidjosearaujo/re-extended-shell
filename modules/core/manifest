@@ -1,0 +1,8 @@
+# What the core module is, and the settings shared by every module.
+# Read by re-extended-shell and by every command's --help (see core/lib.sh).
+#   about: one line saying what the module is for
+#   setting: NAME | default | what it does | commands that use it
+about: What every module shares: settings, PATH helpers, re-doctor and re-extended-shell.
+setting: RE_ZAP_PORT | 9090 | Port ZAP listens on, on this machine | launch-emulator device-proxy frida-server release-device re-doctor
+setting: RE_ZAP_CERT | certs/zap_root_ca.cer in the repo | ZAP's root CA certificate, exported from ZAP | launch-emulator apk-patch re-doctor
+setting: JAVA_HOME | the JDK behind java on PATH, else Homebrew's openjdk | JDK for the Java-based tools | apk-decompile apk-patch xapk-merger re-doctor

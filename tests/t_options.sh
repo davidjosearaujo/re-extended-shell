@@ -27,19 +27,24 @@ apk-pull -s
 applog -s
 frida-server -s
 frida-server -l
+frida-server --ssl-unpinning
+apk-pull -o
+apk-pull -k
 apk-decompile -o
 apk-patch -o
 apk-patch -k
 reset-emulator --snapshot
+reset-emulator -s
+reset-emulator -n
+device-proxy -s
+release-device -s
+launch-emulator -s
 bin-triage -n
 bin-triage -l
 LIST
 
-run reset-emulator --bogus
-expect_rc 1 "an unknown option fails"
-expect_out "Unknown option" "an unknown option is named"
-run bin-triage --help
-expect_rc 0 "--help exits 0"
-expect_out "Usage: bin-triage" "--help prints usage"
+# (help layout and unknown options for every command: t_family.sh)
+run launch-emulator --wiped TestAvd_A
+expect_rc 1 "--wiped is gone (use --clean)"
 
 done_testing

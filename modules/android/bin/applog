@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# logcat for one app's process, following it across restarts.
+# Show the logcat of one app's process, following it across restarts.
 # shellcheck source=../lib.sh
 _re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
 while [ -L "$_re_self" ]; do
@@ -11,13 +11,19 @@ done
 usage() {
     cat <<EOF
 Usage: applog [-s SERIAL] [--start] <PACKAGE> [-- LOGCAT_ARGS...]
-  Shows the logcat of PACKAGE's main process only. Waits for the app to start,
-  and re-attaches whenever it restarts (Ctrl+C to stop).
+
+Shows the logcat of PACKAGE's main process only. Waits for the app to start,
+and re-attaches whenever it restarts (Ctrl+C to stop). Anything after -- goes
+to logcat.
+
+Options:
   -s, --serial SERIAL  Device to use (optional with a single device)
   --start              Force-stop the app and launch it, to catch its startup
-  Anything after -- goes to logcat, e.g.:
-    applog com.example.app -- '*:W'          warnings and errors only
-    applog com.example.app -- -v time        another output format
+  -h, --help           Show this help
+
+Examples:
+  applog com.example.app -- '*:W'     # warnings and errors only
+  applog com.example.app -- -v time   # another output format
 EOF
 }
 
@@ -26,15 +32,15 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         -s|--serial) re_need_arg "$1" "$#"; SERIAL="$2"; shift 2 ;;
         --start) START=1; shift ;;
-        -h|--help) usage; exit 0 ;;
+        -h|--help) re_help; exit 0 ;;
         --) shift; LOGCAT_ARGS+=("$@"); break ;;
-        -*) re_die "Unknown option: $1 (see applog --help)" ;;
+        -*) re_unknown_option "$1" ;;
         *)
             [ -z "$PACKAGE" ] || re_die "only one package at a time (logcat options go after --)."
             PACKAGE="$1"; shift ;;
     esac
 done
-[ -n "$PACKAGE" ] || { usage >&2; exit 1; }
+[ -n "$PACKAGE" ] || re_usage_error "missing <PACKAGE>."
 
 re_require adb
 SERIAL=$(re_pick_device "applog -s" "$SERIAL") || exit 1
@@ -59,7 +65,7 @@ if [ -n "$START" ]; then
     echo "--- restarting $PACKAGE ---" >&2
     "${ADB[@]}" shell am force-stop "$PACKAGE"
     "${ADB[@]}" shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 \
-        || echo "Warning: could not launch $PACKAGE (no launcher activity?), start it yourself." >&2
+        || re_warn "could not launch $PACKAGE (no launcher activity?), start it yourself."
 fi
 
 CURRENT=""

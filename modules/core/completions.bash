@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Core module: bash completion helpers for every module's completions.bash
-# (loaded first), and completion for re-doctor.
+# (loaded first), and completion for re-doctor and re-extended-shell.
 
 # Valid in bash 3.2 (macOS's /bin/bash): no mapfile or ${var,,}.
 
@@ -48,3 +48,14 @@ _re_complete_re_doctor() {
     _re_reply_words "$modules -h --help"
 }
 complete -F _re_complete_re_doctor re-doctor
+
+_re_complete_re_extended_shell() {
+    local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]} f modules=""
+    if [ "$prev" = -m ] || [ "$prev" = --module ]; then
+        for f in "$RE_EXT_HOME"/modules/*/; do f=${f%/}; modules="$modules ${f##*/}"; done
+        _re_reply_words "$modules"
+        return
+    fi
+    _re_reply_words "-m --module --modules --commands --envs --paths --aliases --functions --data --version -h --help"
+}
+complete -F _re_complete_re_extended_shell re-extended-shell

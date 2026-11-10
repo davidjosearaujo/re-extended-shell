@@ -13,46 +13,54 @@ TARGET_AVD=""
 XAPK_FILE=""
 
 usage() {
-    echo "Usage: xapk-installer [-s <device_serial_or_id> | -n <avd_name>] <path_to_file.xapk | path_to_file.zip>"
-    echo ""
-    echo "Examples:"
-    echo "  xapk-installer -s R3CN80ABCDE game.xapk        # Install to a physical device"
-    echo "  xapk-installer -n Pixel_6_Pro game.zip         # Install to an emulator by AVD name"
-    echo "  xapk-installer game.xapk                       # Install to the only connected device"
+    cat <<EOF
+Usage: xapk-installer [-s SERIAL | -n AVD_NAME] <file.xapk|file.zip>
+
+Installs every APK in an XAPK/ZIP bundle with 'adb install-multiple', then
+pushes its OBB data (if any) to /sdcard/Android/obb/.
+
+Options:
+  -s, --serial SERIAL  Device to install on (optional with a single device)
+  -n, --name AVD_NAME  Running emulator to install on, by AVD name
+  -h, --help           Show this help
+
+Examples:
+  xapk-installer -s R3CN80ABCDE game.xapk   # on a physical device
+  xapk-installer -n Pixel_6_Pro game.zip    # on an emulator, by AVD name
+  xapk-installer game.xapk                  # on the only connected device
+EOF
 }
 
-# Parse arguments
-while [[ "$#" -gt 0 ]]; do
-    case $1 in
+while [ "$#" -gt 0 ]; do
+    case "$1" in
         -s|--serial) re_need_arg "$1" "$#"; DEVICE_SERIAL="$2"; shift 2 ;;
         -n|--name)   re_need_arg "$1" "$#"; TARGET_AVD="$2"; shift 2 ;;
-        -h|--help)   usage; exit 0 ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
         *)
-            if [[ "$1" == *.xapk || "$1" == *.zip ]]; then
-                XAPK_FILE="$1"
-            else
-                usage >&2
-                re_die "Unknown parameter or invalid file extension: $1"
-            fi
-            shift
-            ;;
+            case "$1" in
+                *.xapk|*.zip) ;;
+                *) re_die "not a .xapk or .zip file: $1" ;;
+            esac
+            [ -z "$XAPK_FILE" ] || re_die "only one file at a time."
+            XAPK_FILE="$1"; shift ;;
     esac
 done
-
-if [ -z "$XAPK_FILE" ]; then
-    usage >&2
-    re_die "Please specify the path to a .xapk or .zip file."
+if [ -n "$DEVICE_SERIAL" ] && [ -n "$TARGET_AVD" ]; then
+    re_die "pass only one of -s SERIAL or -n AVD_NAME."
 fi
-[ -f "$XAPK_FILE" ] || re_die "File not found: $XAPK_FILE"
+
+[ -n "$XAPK_FILE" ] || re_usage_error "missing <file.xapk|file.zip>."
+[ -f "$XAPK_FILE" ] || re_die "file not found: $XAPK_FILE"
 
 re_require unzip adb
 
 # If an AVD name was provided, resolve it to a serial number
 if [ -n "$TARGET_AVD" ]; then
-    echo "Looking for emulator with AVD name: $TARGET_AVD..."
+    echo "Looking for the emulator running $TARGET_AVD..."
     DEVICE_SERIAL=$(re_emulator_serial "$TARGET_AVD")
-    [ -n "$DEVICE_SERIAL" ] || re_die "Could not find a running emulator with AVD name '$TARGET_AVD'."
-    echo "Found $TARGET_AVD running on $DEVICE_SERIAL"
+    [ -n "$DEVICE_SERIAL" ] || re_die "could not find a running emulator with AVD name '$TARGET_AVD'."
+    echo "Found $TARGET_AVD on $DEVICE_SERIAL."
 fi
 
 # Check the device is available (or that exactly one is connected)
@@ -63,35 +71,27 @@ TMP_DIR=$(mktemp -d)
 trap 'echo "Cleaning up temporary files..."; rm -rf "$TMP_DIR"' EXIT
 
 echo "Extracting '$XAPK_FILE' to temporary directory..."
-unzip -q "$XAPK_FILE" -d "$TMP_DIR" || re_die "Failed to extract archive."
+unzip -q "$XAPK_FILE" -d "$TMP_DIR" || re_die "failed to extract the archive."
 
 APK_FILES=()
 while IFS= read -r -d $'\0'; do
     APK_FILES+=("$REPLY")
 done < <(find "$TMP_DIR" -name "*.apk" -print0)
 
-[ ${#APK_FILES[@]} -gt 0 ] || re_die "No APK files found inside the archive."
+[ ${#APK_FILES[@]} -gt 0 ] || re_die "no APK files found inside the archive."
 
-TARGET_INFO="to device '$DEVICE_SERIAL'"
-echo "Found ${#APK_FILES[@]} APK(s). Installing via adb install-multiple $TARGET_INFO..."
+echo "Installing ${#APK_FILES[@]} APK(s) on $DEVICE_SERIAL (adb install-multiple)..."
+"${ADB_CMD[@]}" install-multiple "${APK_FILES[@]}" || re_die "the installation failed."
+echo "Installed on $DEVICE_SERIAL."
 
-if "${ADB_CMD[@]}" install-multiple "${APK_FILES[@]}"; then
-    echo "APK Installation successful!"
-else
-    re_die "APK installation failed."
-fi
 
 # Handle OBB Data
 if [ -d "$TMP_DIR/Android/obb" ]; then
-    echo "OBB data found. Ensuring device directory exists..."
+    echo "Pushing the OBB data to /sdcard/Android/obb/ on $DEVICE_SERIAL..."
     "${ADB_CMD[@]}" shell mkdir -p /sdcard/Android/obb/
-
-    echo "Pushing OBB files to $TARGET_INFO..."
     if "${ADB_CMD[@]}" push "$TMP_DIR/Android/obb/." /sdcard/Android/obb/; then
-        echo "OBB files pushed successfully!"
+        echo "OBB data pushed."
     else
-        echo "Warning: Failed to push some or all OBB files."
+        re_warn "could not push some or all OBB files."
     fi
 fi
-
-echo "Done!"

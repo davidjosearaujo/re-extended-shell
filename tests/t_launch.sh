@@ -15,10 +15,19 @@ expect_log "-s PHONE123 reverse tcp:9090 tcp:9090" "tunnels the ZAP port"
 expect_log "settings put global http_proxy 127.0.0.1:9090" "sets the proxy"
 expect_log "scrcpy -s PHONE123" "opens scrcpy"
 expect_log "inject_ca.sh" "pushes the CA injection script"
-run release-device PHONE123
-expect_rc 0 "release-device"
+run release-device -s PHONE123
+expect_rc 0 "release-device -s"
 expect_log "settings put global http_proxy :0" "clears the proxy"
 expect_log "reverse --remove tcp:9090" "removes the tunnel"
+
+fake_reset; fake_device PHONE123; fake_device PHONE456
+run launch-emulator -d --no-frida
+expect_rc 1 "several phones and no -s is an error"
+run launch-emulator -s PHONE456 --no-frida
+expect_rc 0 "-s picks the phone and implies -d"
+expect_log "scrcpy -s PHONE456" "...on that phone"
+run launch-emulator -s PHONE456 TestAvd_A
+expect_rc 1 "-s with an AVD name is refused"
 
 fake_reset
 run launch-emulator -d --no-frida

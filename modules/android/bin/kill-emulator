@@ -9,10 +9,16 @@ done
 . "$(dirname -- "$_re_self")/../lib.sh"
 
 usage() {
-    echo "Usage: kill-emulator [-f|--force] <AVD_NAME>"
-    echo "  Asks the emulator to shut down cleanly (adb emu kill). If it can't be reached"
-    echo "  over adb, or doesn't exit within 15s, its process is terminated instead."
-    echo "  -f, --force  Skip the clean shutdown and kill the process right away (SIGKILL)"
+    cat <<EOF
+Usage: kill-emulator [-f] <AVD_NAME>
+
+Asks the emulator to shut down cleanly (adb emu kill). If it can't be reached
+over adb, or doesn't exit within 15s, its process is terminated instead.
+
+Options:
+  -f, --force  Skip the clean shutdown and kill the process right away (SIGKILL)
+  -h, --help   Show this help
+EOF
 }
 
 # PIDs of the emulator process for exactly this AVD (not just a name prefix)
@@ -26,28 +32,26 @@ FORCE="" AVD_NAME=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -f|--force) FORCE=1; shift ;;
-        -h|--help)  usage; exit 0 ;;
-        -*) re_die "Unknown option: $1" ;;
-        *)  AVD_NAME="$1"; shift ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
+        *)  [ -z "$AVD_NAME" ] || re_die "only one AVD at a time."
+            AVD_NAME="$1"; shift ;;
     esac
 done
 
 re_require adb
 
 if [ -z "$AVD_NAME" ]; then
-    echo "Error: Please specify the AVD name to kill."
-    usage
     RUNNING=$(re_running_emulators)
-    [ -n "$RUNNING" ] && { echo "Running emulators:"; sed 's/^/  /' <<<"$RUNNING"; }
-    exit 1
+    re_usage_error "missing <AVD_NAME>." "${RUNNING:+Running emulators:
+$(sed 's/^/  /' <<<"$RUNNING")}"
 fi
 
 PIDS=$(emulator_pids "$AVD_NAME")
 SERIAL=$(re_emulator_serial "$AVD_NAME")
 
 if [ -z "$PIDS" ] && [ -z "$SERIAL" ]; then
-    echo "No running emulator found with the name: $AVD_NAME"
-    exit 1
+    re_die "no running emulator found with the name: $AVD_NAME"
 fi
 
 if [ -n "$FORCE" ]; then

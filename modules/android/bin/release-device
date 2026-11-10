@@ -8,25 +8,35 @@ while [ -L "$_re_self" ]; do
 done
 . "$(dirname -- "$_re_self")/../lib.sh"
 
+usage() {
+    cat <<EOF
+Usage: release-device [-s SERIAL] [--reboot]
+
+Undoes 'launch-emulator -d', so a physical device works normally once
+unplugged: closes scrcpy, clears the global HTTP proxy, removes the adb reverse
+tunnel, stops frida-server and deletes the pushed files. The injected CA stays
+trusted until the device reboots.
+
+Options:
+  -s, --serial SERIAL  Device to release (optional with a single device)
+  --reboot             Also reboot the device, which drops the injected CA
+  -h, --help           Show this help
+EOF
+}
+
 REBOOT="" SERIAL=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
+        -s|--serial) re_need_arg "$1" "$#"; SERIAL="$2"; shift 2 ;;
         --reboot) REBOOT=1; shift ;;
-        -h|--help)
-            echo "Usage: release-device [--reboot] [SERIAL]"
-            echo "  Closes scrcpy, clears the global HTTP proxy, removes the adb reverse tunnel"
-            echo "  and deletes the pushed CA files, so the device works normally once unplugged."
-            echo "  SERIAL can be omitted when only one device is connected."
-            echo "  --reboot  Also reboot the device, which drops the injected CA"
-            exit 0
-            ;;
-        -*) re_die "Unknown option: $1" ;;
-        *)  SERIAL="$1"; shift ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
+        *)  re_unexpected_arg "$1" "name the device with -s SERIAL" ;;
     esac
 done
 
 re_require adb
-SERIAL=$(re_pick_device --physical "release-device" "$SERIAL") || exit 1
+SERIAL=$(re_pick_device --physical "release-device -s" "$SERIAL") || exit 1
 ADB=(adb -s "$SERIAL")
 echo "Releasing device: $SERIAL"
 

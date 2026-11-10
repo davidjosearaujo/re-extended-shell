@@ -38,6 +38,141 @@ re_need_arg() {
     [ "$2" -ge 2 ] || re_die "$1 needs a value."
 }
 
+# --- What every command shares: help, errors, version ------------------------
+# Every command follows the same conventions (see "Adding a module" in the
+# README). Its option loop ends with:
+#     -h|--help) re_help; exit 0 ;;
+#     -*) re_unknown_option "$1" ;;
+#     *)  re_unexpected_arg "$1" ;;      (or take it as an operand)
+# and it defines usage(): the Usage line(s), a blank line, a description, then
+# "Options:" (and optionally "Actions:", "Output:", "Examples:") sections.
+
+RE_CMD=${0##*/}   # the running command's name, for messages
+
+# Colours for terminal output (none when piped, or with NO_COLOR set)
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+    RE_C_OK=$'\033[32m' RE_C_WARN=$'\033[33m' RE_C_FAIL=$'\033[31m'
+    RE_C_BOLD=$'\033[1m' RE_C_DIM=$'\033[2m' RE_C_OFF=$'\033[0m'
+else
+    # shellcheck disable=SC2034  # used by the scripts that source this file
+    RE_C_OK="" RE_C_WARN="" RE_C_FAIL="" RE_C_BOLD="" RE_C_DIM="" RE_C_OFF=""
+fi
+
+# "Warning: MESSAGE" on stderr
+re_warn() {
+    echo "Warning: $*" >&2
+}
+
+# Usage: -*) re_unknown_option "$1" ;;
+re_unknown_option() {
+    re_die "unknown option: $1 (see $RE_CMD --help)"
+}
+
+# An argument the command doesn't take. HINT replaces the pointer to --help.
+# Usage: *) re_unexpected_arg "$1" ["name the device with -s SERIAL"] ;;
+re_unexpected_arg() {
+    re_die "unexpected argument: $1 (${2:-see $RE_CMD --help})"
+}
+
+# For a missing operand: the error, the Usage line(s) of usage(), then EXTRA
+# (e.g. what could be picked), on stderr.
+# Usage: [ -n "$APK" ] || re_usage_error "missing <file.apk>." ["EXTRA"]
+re_usage_error() {
+    {
+        echo "Error: $1"
+        usage | awk 'NR == 1 || /^       [^ ]/ { print; next } { exit }'
+        [ -z "${2:-}" ] || printf '%s\n' "$2"
+        echo "Run '$RE_CMD --help' for details."
+    } >&2
+    exit 1
+}
+
+# Version of this copy: its git tag (plus commits since, and -dirty), or "unknown"
+re_version() {
+    local V=""
+    if [ -e "$RE_EXT_HOME/.git" ] && command -v git >/dev/null 2>&1; then
+        V=$(git -C "$RE_EXT_HOME" describe --tags --always --dirty 2>/dev/null) || V=""
+    fi
+    echo "${V:-unknown}"
+}
+
+# Module names: core first, then the others alphabetically (as the shell loads them)
+re_modules() {
+    local D
+    echo core
+    for D in "$RE_EXT_HOME"/modules/*/; do
+        D=${D%/}; D=${D##*/}
+        [ "$D" = core ] || echo "$D"
+    done
+}
+
+# Each module describes itself in modules/<module>/manifest:
+#   about: one line saying what the module is for
+#   setting: NAME | default | what it does | commands that use it
+# Prints the module's "about" line.
+re_module_about() {
+    local L
+    [ -f "$RE_EXT_HOME/modules/$1/manifest" ] || return 0
+    while IFS= read -r L; do
+        case "$L" in about:*) L=${L#about:}; echo "${L# }"; return 0 ;; esac
+    done <"$RE_EXT_HOME/modules/$1/manifest"
+}
+
+# Prints MODULE|NAME|DEFAULT|DESCRIPTION|COMMANDS for every setting (of the
+# given space-separated modules, default all; only those the command CMD uses,
+# if given), fields trimmed. One awk for all the manifests.
+# Usage: re_settings ["MODULE MODULE..."] [CMD]
+re_settings() {
+    local M FILES=()
+    for M in ${1:-$(re_modules)}; do
+        [ -f "$RE_EXT_HOME/modules/$M/manifest" ] && FILES+=("$RE_EXT_HOME/modules/$M/manifest")
+    done
+    [ "${#FILES[@]}" -gt 0 ] || return 0
+    awk -F'|' -v cmd="${2:-}" '
+        function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+        FNR == 1 { m = FILENAME; sub(/\/manifest$/, "", m); sub(/.*\//, "", m) }
+        /^setting:/ {
+            sub(/^setting:/, "")
+            if (cmd != "") {
+                n = split($4, a, " "); used = 0
+                for (i = 1; i <= n; i++) if (a[i] == cmd) used = 1
+                if (!used) next
+            }
+            print m "|" trim($1) "|" trim($2) "|" trim($3) "|" trim($4)
+        }' "${FILES[@]}"
+}
+
+# Dies if PATH exists and force ($1) is empty. WHAT completes "use -f to ...".
+# Usage: re_refuse_existing "$FORCE" PATH ["replace it"]
+re_refuse_existing() {
+    [ ! -e "$2" ] || [ -n "$1" ] || re_die "$2 already exists (use -f to ${3:-replace it})."
+}
+
+# Prints the command's help: its usage(), the settings it reads (from the
+# manifests, with the value set in the environment, if any), and the footer
+# every command shares.
+re_help() {
+    local LINES NAME DEFAULT DESC CMDS W=0 VALUE
+    usage
+    LINES=$(re_settings "" "$RE_CMD")
+    if [ -n "$LINES" ]; then
+        while IFS='|' read -r _ NAME _ _ _; do
+            [ "${#NAME}" -le "$W" ] || W=${#NAME}
+        done <<<"$LINES"
+        echo
+        echo "Settings (export them in local/env.sh):"
+        while IFS='|' read -r _ NAME DEFAULT DESC CMDS; do
+            VALUE=$(printenv "$NAME" 2>/dev/null)
+            printf "  %-${W}s  %s (default: %s%s)\n" "$NAME" "$DESC" "$DEFAULT" "${VALUE:+; now: $VALUE}"
+        done <<<"$LINES"
+    fi
+    echo
+    echo "RE Extended Shell $(re_version). All commands: re-extended-shell --commands"
+}
+
+# Shortens $HOME to ~ for display
+re_tilde() { case "$1" in "$HOME"/*) echo "~${1#"$HOME"}" ;; *) echo "$1" ;; esac; }
+
 # Downloads URL to DEST through DEST.part, so a failed or interrupted download
 # never leaves a half-written file (or damages an existing one). Creates DEST's
 # directory. Extra arguments go to curl (e.g. --progress-bar, -sS).

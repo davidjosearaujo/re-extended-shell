@@ -21,5 +21,17 @@ run xapk-installer "$T_DIR/missing.xapk"
 expect_rc 1 "xapk-installer with a missing file fails"
 run xapk-installer notes.txt
 expect_rc 1 "xapk-installer rejects other extensions"
+: >"$T_DIR/other.xapk"
+run xapk-installer "$T_DIR/game.xapk" "$T_DIR/other.xapk"
+expect_rc 1 "xapk-installer takes one file at a time"
+run xapk-installer -s emulator-5554 -n TestAvd_A "$T_DIR/game.xapk"
+expect_rc 1 "xapk-installer refuses -s with -n"
+run xapk-merger "$T_DIR/game.xapk" "$T_DIR/other.xapk"
+expect_rc 1 "xapk-merger takes one input at a time"
+run kill-emulator TestAvd_A TestAvd_B
+expect_rc 1 "kill-emulator takes one AVD at a time"
+run kill-emulator
+expect_rc 1 "kill-emulator without a name fails"
+[ -z "$(kill-emulator 2>/dev/null)" ] && pass "...with the error on stderr" || fail "...with the error on stderr"
 
 done_testing

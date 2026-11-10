@@ -10,30 +10,44 @@ done
 
 usage() {
     cat <<EOF
-Usage: apk-pull [-s SERIAL] [--merge] [-f] <PACKAGE>
-  Pulls every APK of an installed app (base + splits) into ./<PACKAGE>-splits/
-  -s, --serial SERIAL  Device to pull from (optional with a single device)
-  --merge              Save a single installable ./<PACKAGE>.apk instead: the
-                       base APK as-is if the app has no splits, otherwise the
-                       splits merged with xapk-merger (debug-signed)
-  -f, --force          Replace an existing output
+Usage: apk-pull [-s SERIAL] [-o PATH] [-f] [--merge [-k KEYSTORE [-p PASSWORD] [-a ALIAS]]] <PACKAGE>
+
+Pulls every APK of an installed app (base + splits) into ./<PACKAGE>-splits/.
+With --merge, saves a single installable APK instead: the base APK as-is if the
+app has no splits, otherwise the splits merged with xapk-merger.
+
+Options:
+  -s, --serial SERIAL      Device to pull from (optional with a single device)
+  -o, --output PATH        Output directory (default: ./<PACKAGE>-splits/), or
+                           with --merge the output APK (default: ./<PACKAGE>.apk)
+  -f, --force              Replace an existing output
+  --merge                  Save a single installable APK
+  -k, --keystore KEYSTORE  With --merge, sign with this keystore (default: the
+                           debug keystore)
+  -p, --ks-pass PASSWORD   Its password (default: android)
+  -a, --alias ALIAS        Its key alias (default: androiddebugkey)
+  -h, --help               Show this help
 EOF
 }
 
-SERIAL="" MERGE="" FORCE="" PACKAGE=""
+SERIAL="" MERGE="" FORCE="" PACKAGE="" OUTPUT=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -s|--serial) re_need_arg "$1" "$#"; SERIAL="$2"; shift 2 ;;
+        -o|--output) re_need_arg "$1" "$#"; OUTPUT="$2"; shift 2 ;;
+        -k|--keystore|-p|--ks-pass|-a|--alias) re_need_arg "$1" "$#"; re_sign_opt "$1" "$2"; shift 2 ;;
         --merge) MERGE=1; shift ;;
         -f|--force) FORCE=1; shift ;;
-        -h|--help) usage; exit 0 ;;
-        -*) re_die "Unknown option: $1 (see apk-pull --help)" ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
         *)
             [ -z "$PACKAGE" ] || re_die "only one package at a time."
             PACKAGE="$1"; shift ;;
     esac
 done
-[ -n "$PACKAGE" ] || { usage >&2; exit 1; }
+[ -n "$PACKAGE" ] || re_usage_error "missing <PACKAGE>."
+[ -z "$RE_SIGN_GIVEN" ] || [ -n "$MERGE" ] || re_die "-k, -p and -a only apply with --merge."
+re_check_keystore
 
 re_require adb
 SERIAL=$(re_pick_device "apk-pull -s" "$SERIAL") || exit 1
@@ -47,14 +61,16 @@ done < <(adb -s "$SERIAL" shell pm path "$PACKAGE" 2>/dev/null | tr -d '\r')
 [ "${#REMOTE[@]}" -gt 0 ] || re_die "could not list the APKs of $PACKAGE."
 
 if [ -n "$MERGE" ]; then
-    OUT="$PWD/$PACKAGE.apk"
-    if [ -e "$OUT" ] && [ -z "$FORCE" ]; then re_die "$OUT already exists (use -f to replace it)."; fi
+    OUT="${OUTPUT:-$PWD/$PACKAGE.apk}"
+    re_refuse_existing "$FORCE" "$OUT"
+    mkdir -p "$(dirname "$OUT")" || exit 1
     DEST=$(mktemp -d)
     trap 'rm -rf "$DEST"' EXIT
 else
-    DEST="$PWD/$PACKAGE-splits"
+    DEST="${OUTPUT:-$PWD/$PACKAGE-splits}"
+    DEST="${DEST%/}"
     if [ -d "$DEST" ] && [ -n "$(ls -A "$DEST" 2>/dev/null)" ]; then
-        [ -n "$FORCE" ] || re_die "$DEST already exists (use -f to replace its APKs)."
+        re_refuse_existing "$FORCE" "$DEST" "replace its APKs"
         rm -f "$DEST"/*.apk
     fi
     mkdir -p "$DEST" || exit 1
@@ -75,8 +91,11 @@ fi
 if [ "${#REMOTE[@]}" -eq 1 ]; then
     mv -f "$DEST/$(basename "${REMOTE[0]}")" "$OUT"
     echo "No splits, saved the base APK (original signature) to $OUT"
+    [ -z "$KEYSTORE" ] || echo "Note: nothing was re-signed, so -k was not used."
 else
     echo "Merging the splits with xapk-merger..."
     rm -f "$OUT"
-    "$RE_ANDROID_DIR/bin/xapk-merger" -o "$OUT" "$DEST" || re_die "merge failed."
+    SIGN_ARGS=()
+    [ -z "$KEYSTORE" ] || SIGN_ARGS=(-k "$KEYSTORE" -p "$KS_PASS" -a "$KS_ALIAS")
+    "$RE_ANDROID_DIR/bin/xapk-merger" -o "$OUT" ${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"} "$DEST" || re_die "merge failed."
 fi

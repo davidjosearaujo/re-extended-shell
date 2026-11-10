@@ -18,6 +18,33 @@ expect_rc 1 "re_need_arg: no value is an error"
 lib 'f() { re_need_arg "$1" "$#"; echo got; }; f -x v'
 expect_out "got" "re_need_arg: a value passes"
 
+# re_refuse_existing: only a missing path, or a force flag, gets through
+: >"$T_DIR/there"
+lib "re_refuse_existing '' '$T_DIR/missing' && echo ok"
+expect_out "ok" "re_refuse_existing: a missing path passes"
+lib "re_refuse_existing '' '$T_DIR/there'"
+expect_rc 1 "re_refuse_existing: an existing path is refused"
+expect_out "there already exists (use -f to replace it)." "...saying how to force it"
+lib "re_refuse_existing '' '$T_DIR/there' 'replace its APKs'"
+expect_out "(use -f to replace its APKs)" "...with the caller's wording"
+lib "re_refuse_existing 1 '$T_DIR/there' && echo forced"
+expect_out "forced" "re_refuse_existing: -f lets it through"
+
+# re_sign_opt: -k/-p/-a fill the signing variables; defaults mean the debug keystore
+lib 're_sign_opt --keystore my.jks; re_sign_opt -p secret; re_sign_opt --alias key; echo "$KEYSTORE $KS_PASS $KS_ALIAS $RE_SIGN_GIVEN"'
+expect_out "my.jks secret key 1" "re_sign_opt: sets keystore, password and alias"
+lib 'echo "[$KEYSTORE] $KS_PASS $KS_ALIAS [$RE_SIGN_GIVEN]"'
+expect_out "[] android androiddebugkey []" "re_sign_opt: defaults are the debug keystore"
+lib 'KEYSTORE=/nonexistent/x.jks; re_check_keystore'
+expect_out "keystore not found: /nonexistent/x.jks" "re_check_keystore: a missing keystore is an error"
+
+# re_settings: one pass over the manifests, optionally for one command
+lib 're_settings "" kill-emulator | cut -d"|" -f2'
+expect_out "ANDROID_HOME" "re_settings CMD: lists what that command uses"
+expect_no_out "JADX" "...and nothing else"
+lib 're_settings android | head -n 1 | cut -d"|" -f1,2'
+expect_out "android|ANDROID_HOME" "re_settings MODULE: prefixes the module"
+
 printf abc >"$T_DIR/abc"
 lib "re_hash sha256 '$T_DIR/abc'"
 expect_out "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" "re_hash sha256 of 'abc'"

@@ -12,18 +12,27 @@ IMAGE="${RE_ANDROID_CONTAINER_IMAGE:-us-docker.pkg.dev/android-emulator-268719/i
 ENGINE="${RE_CONTAINER_ENGINE:-}"
 NAME="android_container"
 
-case "${1:-}" in
-    -h|--help)
-        echo "Usage: androidcontainer"
-        echo "  Starts '$NAME' from $IMAGE"
-        echo "  (RE_ANDROID_CONTAINER_IMAGE) with podman, or docker when podman is missing"
-        echo "  (RE_CONTAINER_ENGINE), then connects adb to localhost:5555 as root."
-        echo "  Stop it with: <podman|docker> stop $NAME"
-        exit 0
-        ;;
-    "") ;;
-    *) re_die "Unknown parameter: $1" ;;
-esac
+usage() {
+    cat <<EOF
+Usage: androidcontainer
+
+Starts '$NAME' from $IMAGE
+with podman (or docker when podman is missing), then connects adb to
+localhost:5555 as root. Linux only: it needs KVM.
+Stop it with: <podman|docker> stop $NAME
+
+Options:
+  -h, --help  Show this help
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
+        *)  re_unexpected_arg "$1" ;;
+    esac
+done
 
 if [ -z "$ENGINE" ]; then
     for ENGINE in podman docker ""; do
@@ -55,4 +64,4 @@ for _ in $(seq 1 30); do
 done
 [ -n "$CONNECTED" ] || re_die "could not connect adb to localhost:5555 after 60s (see '$ENGINE logs $NAME')."
 adb -s localhost:5555 wait-for-device root
-echo "ADB connected!"
+echo "adb is connected to $NAME as root (localhost:5555)."

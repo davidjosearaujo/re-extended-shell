@@ -17,14 +17,20 @@ run reset-emulator
 expect_rc 1 "several emulators and no target is an error"
 expect_out "emulator-5556 TestAvd_B" "lists the running emulators"
 expect_no_log "snapshot load" "touches nothing"
-run reset-emulator TestAvd_B
-expect_rc 0 "target by AVD name"
+run reset-emulator -n TestAvd_B
+expect_rc 0 "target by AVD name (-n)"
 expect_log "-s emulator-5556 emu avd snapshot load" "loads on the named emulator"
-run reset-emulator emulator-5554
-expect_log "-s emulator-5554 emu avd snapshot load" "target by serial"
-run reset-emulator nope
+run reset-emulator -s emulator-5554
+expect_log "-s emulator-5554 emu avd snapshot load" "target by serial (-s)"
+run reset-emulator -s TestAvd_B
+expect_rc 1 "-s does not match an AVD name"
+run reset-emulator -n nope
 expect_rc 1 "unknown target is an error"
 expect_out "no running emulator matches 'nope'" "unknown target is named"
+run reset-emulator -s emulator-5554 -n TestAvd_B
+expect_rc 1 "-s and -n together are refused"
+run reset-emulator emulator-5554
+expect_rc 1 "a bare target is refused"
 
 fake_reset; fake_emulator emulator-5554 TestAvd_A
 run reset-emulator
@@ -54,7 +60,7 @@ run reset-emulator --snapshot app-ready
 expect_log "emu avd snapshot load app-ready" "--snapshot loads that one"
 run reset-emulator --snapshot other
 expect_rc 1 "unknown named snapshot is an error"
-expect_out "reset-emulator --save --snapshot other" "...and says how to create it"
+expect_out "reset-emulator -s emulator-5554 --save --snapshot other" "...and says how to create it"
 run reset-emulator --snapshot 'bad name;x'
 expect_rc 1 "a snapshot name with odd characters is refused"
 

@@ -20,6 +20,10 @@ directory is read or changed.
   frida-server that can be pushed, started and stopped. Every call is appended to
   `$FAKE_STATE/log`, which the tests search with `expect_log`.
 
+`t_family.sh` checks that every command follows the family conventions (help layout,
+errors, summary line, completions, README entry, manifest settings), so a new command
+is covered there automatically.
+
 To cover a new command, add a `t_<name>.sh` that sources `harness.sh`, set up the fake
 devices it needs, `run` the command and `expect_*` on the result. If it needs more
 from `adb`, teach `fake/adb` that one call.

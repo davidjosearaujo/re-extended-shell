@@ -1,0 +1,5 @@
+# What the binary module is, and its settings.
+# Read by re-extended-shell and by every command's --help (see core/lib.sh).
+#   about: one line saying what the module is for
+#   setting: NAME | default | what it does | commands that use it
+about: A first look at native executables and libraries (ELF, Mach-O, PE).

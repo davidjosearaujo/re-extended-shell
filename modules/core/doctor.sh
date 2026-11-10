@@ -4,22 +4,22 @@
 # shellcheck disable=SC2154  # _re_shell_home and C_* come from bin/re-doctor
 
 doc_section "RE Extended Shell"
-doc_info "$RE_OS $(uname -m), bash $BASH_VERSION, repo $(doc_path "$RE_EXT_HOME")"
+doc_info "$RE_OS $(uname -m), bash $BASH_VERSION, repo $(re_tilde "$RE_EXT_HOME")"
 
 HOOKS=""
 OTHER_HOOK=""
 for RC in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.bash_login" "${ZDOTDIR:-$HOME}/.zshrc"; do
     if [ ! -f "$RC" ] || ! grep -q 're_extended_shell_main' "$RC"; then continue; fi
     if grep -qF "$RE_EXT_HOME/re_extended_shell_main" "$RC"; then
-        HOOKS="$HOOKS $(doc_path "$RC")"
+        HOOKS="$HOOKS $(re_tilde "$RC")"
     else
-        OTHER_HOOK="$OTHER_HOOK $(doc_path "$RC")"
+        OTHER_HOOK="$OTHER_HOOK $(re_tilde "$RC")"
     fi
 done
 if [ -n "$HOOKS" ]; then
     doc_ok "Hooked into:$HOOKS"
 else
-    doc_fail "Not hooked into any shell rc file" "Run: $(doc_path "$RE_EXT_HOME")/install"
+    doc_fail "Not hooked into any shell rc file" "Run: $(re_tilde "$RE_EXT_HOME")/install"
 fi
 [ -z "$OTHER_HOOK" ] || doc_warn "Hook pointing at another copy of the repo in:$OTHER_HOOK" \
     "Run ./install from the copy you want to use, it updates the line in place."
@@ -27,7 +27,7 @@ fi
 if [ -z "$_re_shell_home" ]; then
     doc_warn "Not loaded in this shell" "Open a new shell (after ./install) so the settings and completions apply."
 elif [ "$_re_shell_home" != "$RE_EXT_HOME" ]; then
-    doc_warn "This shell loaded another copy: $(doc_path "$_re_shell_home")"
+    doc_warn "This shell loaded another copy: $(re_tilde "$_re_shell_home")"
 fi
 
 MODULE_LIST="" OFF_PATH=""
@@ -49,7 +49,7 @@ doc_section "Java"
 if [ -n "${JAVA_HOME:-}" ] && [ ! -x "$JAVA_HOME/bin/java" ]; then
     doc_fail "JAVA_HOME has no bin/java: $JAVA_HOME" "Fix it in local/env.sh, or unset it to use the java on PATH."
 elif [ -n "${JAVA_HOME:-}" ]; then
-    doc_ok "JAVA_HOME $(doc_path "$JAVA_HOME")"
+    doc_ok "JAVA_HOME $(re_tilde "$JAVA_HOME")"
 fi
 if command -v java >/dev/null 2>&1; then
     doc_info "$(java -version 2>&1 | head -n 1)"
@@ -59,7 +59,7 @@ fi
 
 doc_section "ZAP"
 if [ ! -f "$RE_ZAP_CERT" ]; then
-    doc_fail "No ZAP root CA at $(doc_path "$RE_ZAP_CERT")" \
+    doc_fail "No ZAP root CA at $(re_tilde "$RE_ZAP_CERT")" \
         "Export it (ZAP: Tools > Options > Network > Server Certificates > Save) or set RE_ZAP_CERT."
 elif ! command -v openssl >/dev/null 2>&1; then
     doc_fail "openssl not found, needed to read and convert the ZAP CA"
@@ -69,7 +69,7 @@ else
         if openssl x509 -inform "$F" -in "$RE_ZAP_CERT" -noout >/dev/null 2>&1; then FORM=$F; break; fi
     done
     if [ -z "$FORM" ]; then
-        doc_fail "$(doc_path "$RE_ZAP_CERT") is not a PEM or DER X.509 certificate"
+        doc_fail "$(re_tilde "$RE_ZAP_CERT") is not a PEM or DER X.509 certificate"
     else
         NAME=$(openssl x509 -inform "$FORM" -in "$RE_ZAP_CERT" -noout -subject 2>/dev/null \
             | sed -n 's/.*CN *= *\([^,/]*\).*/\1/p')
