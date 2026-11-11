@@ -19,7 +19,33 @@ git-ignored `local/` folder, so updates never conflict with them.
 - [Core](#core): what every module shares, `re-doctor`, which checks your setup, and
   `re-extended-shell`, which shows everything that's installed.
 
-More modules will follow. See [Adding a module](#adding-a-module).
+More modules will follow. See [Adding a module](#adding-a-module), or go straight to
+[modules/README.md](modules/README.md).
+
+## Contents
+
+- [Requirements](#requirements)
+- [Install](#install)
+  - [Using the commands](#using-the-commands)
+- [Configuration](#configuration)
+  - [Change a setting (environment variables)](#change-a-setting-environment-variables)
+  - [Add your own PATH entries, aliases, functions or completions](#add-your-own-path-entries-aliases-functions-or-completions)
+  - [After `git pull`](#after-git-pull)
+- [Core](#core)
+- [Android](#android)
+  - [Commands](#commands)
+  - [Requirements](#requirements-1)
+  - [How the CA injection works](#how-the-ca-injection-works)
+  - [SSL unpinning](#ssl-unpinning)
+  - [Settings](#settings)
+  - [Notes](#notes)
+- [Binary](#binary)
+  - [Commands](#commands-1)
+  - [Requirements](#requirements-2)
+- [Layout and customisation](#layout-and-customisation)
+- [Adding a module](#adding-a-module)
+- [Notes](#notes-1)
+- [License](#license)
 
 ## Requirements
 
@@ -329,7 +355,7 @@ Native executables and libraries on Linux, macOS and Windows, with no device inv
 
 ```
 re_extended_shell_main  the one file your rc sources; loads every module
-modules/
+modules/                (README.md: how to write a module)
   core/                 shared by every module, always loaded first
     lib.sh                helpers for every module's commands
     bin/re-doctor
@@ -367,81 +393,14 @@ Files in `modules/` and `local/` are sourced by both bash and zsh, so keep them
 portable or check `$BASH_VERSION` / `$ZSH_VERSION`. The commands in `bin/` are
 separate bash scripts, so they behave the same whichever shell you use.
 
-If you change the code, keep it working on both systems: bash 3.2 (no `mapfile`,
-`declare -A` or `${var,,}`) and BSD tools as well as GNU ones (no `readlink -f`,
-`sed -i`, `grep -P`, `ss` or `/proc` without a fallback). `modules/core/lib.sh` has
-helpers for the OS-specific parts, e.g. `re_port_listening` and `re_proc_has_arg`.
-In a command's option parser, call `re_need_arg "$1" "$#"` before reading `$2`, so a
-missing value is an error instead of an endless loop.
-
 ## Adding a module
 
-A module is a folder in `modules/`, picked up automatically. Every file in it but
-`manifest` is optional. For a module called `ios`:
-
-| File | Purpose |
-| --- | --- |
-| `manifest` | Required. An `about:` line saying what the module is for, and a `setting: NAME \| default \| what it does \| commands that use it` line per setting its commands read. `re-extended-shell` and every command's `--help` read it. |
-| `bin/<command>` | Each command, a bash script that sources `../lib.sh`. Line 2 is a one-line summary (`# Do this to that.`), which `re-extended-shell --commands` shows. Copy the first lines of an existing command to get the self-locating `source` line. |
-| `lib.sh` | Helpers and settings defaults for the module's commands. Sources `../core/lib.sh` first. Put downloads and caches under `$RE_DATA_DIR/ios/`. |
-| `env.sh`, `paths.sh` | Environment and PATH for your interactive shell: SDK detection and `re_path_append` for its tools. Not for user settings. |
-| `functions.sh`, `aliases.sh` | Shell functions and aliases. |
-| `completions.bash`, `completions.zsh` | Tab completion. `_re_reply_words`, `_re_reply_files` and `_re_reply_dirs` from `core/completions.bash` are available. |
-| `doctor.sh` | Checks for `re-doctor`, with its `doc_ok`, `doc_warn`, `doc_fail`, `doc_info` and `doc_tool` helpers. |
-| `libexec/` | Helper programs the commands run that aren't commands themselves, such as a Python script (standard library only, run with `python3 -I`). |
-| `purge.sh` | Calls `re_purge <path> [label]` for each file or folder its commands leave outside the repo (except under `$RE_DATA_DIR`, which core already covers). |
-| `README.md` (the main one) | A section with the module's commands, requirements and settings, plus a line under **Modules**. |
-
-The commands are one family: they look and behave the same, so whoever knows one
-knows them all. A new command must follow these conventions.
-
-**Options**
-
-- Every option has a long form; common ones have a short form too.
-- A device is chosen with `-s, --serial SERIAL` and a running emulator by AVD name
-  with `-n, --name AVD_NAME`, never by a bare argument. Either can be left out when
-  only one device is connected.
-- `-o, --output` sets where output goes. A command never replaces an existing output
-  unless given `-f, --force`. Signing takes `-k, --keystore`, `-p, --ks-pass`,
-  `-a, --alias`. A switch that turns something off is `--no-<thing>`.
-
-**Help**: `usage()` prints these parts, in this order, separated by blank lines:
-
-1. `Usage: <command> ...` (more forms on lines starting with 7 spaces). Option values
-   are UPPERCASE (`-o FILE`), required operands in angle brackets (`<file.apk>`),
-   alternatives as `[-a | -b]`.
-2. A description, flush left, wrapped at 80 columns.
-3. Optionally `Actions:`, `Arguments:` or `Output:`, two-space indented lists.
-4. `Options:`, one line per option in the order device, output, `-f`, the command's
-   own, signing, and last `-h, --help  Show this help`. Descriptions start in one
-   column, and so do their continuation lines. Defaults read `(default: X)`.
-5. Optionally `Examples:`, as `  command   # what it does`.
-
-`-h|--help) re_help; exit 0 ;;` prints that, then a `Settings:` section built from the
-manifests and the footer every command shares.
-
-**Errors and messages** (helpers in `modules/core/lib.sh`)
-
-- `re_die "..."` prints `Error: ...`, `re_warn "..."` prints `Warning: ...`, both on
-  stderr and starting lowercase.
-- The option loop ends with `-*) re_unknown_option "$1" ;;` and, for arguments it
-  doesn't take, `*) re_unexpected_arg "$1" ;;`. Options that take a value check for it
-  with `re_need_arg`.
-- A command that writes a file or folder calls `re_refuse_existing "$FORCE" PATH` before
-  touching it. Signing options go through `re_sign_opt` and `re_check_keystore`.
-- A missing operand is `re_usage_error "missing <file.apk>."`: the error, the Usage
-  line and a pointer to `--help`.
-- Progress lines end with `...`; the last line says what was done and where the result
-  is (`Merged APK: ./app_merged.apk`). No message ends with `!`.
-- A command that prints a report uses `re_section "Title"`, `re_row Label value` and
-  `... | re_list [LIMIT]` (an indented list that ends with "... and N more"), so every
-  report has the same layout.
-- A command that needs root on a device gets it with `ROOT=$(re_require_root "$SERIAL") || exit 1`
-  and runs commands with `re_root_shell`. Commands that read an APK's manifest use
-  `re_manifest_records`; awk code that reads `aapt2` output starts with `"$RE_AWK_LIB"`.
-- Strings and secrets: `re_stringx` runs `stringx` and prints its hits as `WHERE: STRING`
-  (it fails when `stringx` isn't installed, so fall back to `strings` or `grep`), and
-  `RE_SECRET_WORDS` is the regex for words that name a secret.
+A module is a folder in `modules/`, picked up automatically, with its commands, its
+settings and its `re-doctor` checks. [modules/README.md](modules/README.md) is the guide
+for writing one: the files a module can have, a working example you can copy, the
+conventions every command follows (options, help, errors, reports), how settings are
+declared, the portability rules (bash 3.2, macOS and Linux), how to test it and a
+checklist.
 
 ## Notes
 

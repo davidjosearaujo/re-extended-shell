@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Every command looks and behaves like the rest of the family: the same help
 # layout, the same errors, a summary line, completions, a README entry, and
-# settings declared in a manifest. See "Adding a module" in the README.
+# settings declared in a manifest. See modules/README.md.
 . "$(dirname -- "${BASH_SOURCE[0]}")/harness.sh"
 fake_reset
 

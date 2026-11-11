@@ -47,8 +47,7 @@ re_need_arg() {
 }
 
 # --- What every command shares: help, errors, version ------------------------
-# Every command follows the same conventions (see "Adding a module" in the
-# README). Its option loop ends with:
+# Every command follows the same conventions (see modules/README.md). Its option loop ends with:
 #     -h|--help) re_help; exit 0 ;;
 #     -*) re_unknown_option "$1" ;;
 #     *)  re_unexpected_arg "$1" ;;      (or take it as an operand)

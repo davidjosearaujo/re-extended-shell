@@ -27,5 +27,3 @@ is covered there automatically.
 To cover a new command, add a `t_<name>.sh` that sources `harness.sh`, set up the fake
 devices it needs, `run` the command and `expect_*` on the result. If it needs more
 from `adb`, teach `fake/adb` that one call.
-
-These files live on the `dev` branch only.
