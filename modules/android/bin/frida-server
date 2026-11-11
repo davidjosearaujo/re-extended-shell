@@ -63,8 +63,7 @@ done
 
 re_require adb
 SERIAL=$(re_pick_device "frida-server -s" "$SERIAL") || exit 1
-ROOT=$(re_root_mode --adb-root "$SERIAL") \
-    || re_die "no root on $SERIAL (needs an emulator with a Google APIs image, a userdebug build, or su)."
+ROOT=$(re_require_root "$SERIAL") || exit 1
 # 'adb root' restarts adbd, and the device shows up as offline until it is back
 adb -s "$SERIAL" wait-for-device
 

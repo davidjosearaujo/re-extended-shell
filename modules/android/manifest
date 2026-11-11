@@ -3,7 +3,7 @@
 #   about: one line saying what the module is for
 #   setting: NAME | default | what it does | commands that use it
 about: Emulators and rooted phones with ZAP's CA injected, Frida with SSL unpinning, and APK tooling.
-setting: ANDROID_HOME | the SDK in the default Android Studio location | Android SDK | launch-emulator kill-emulator reset-emulator apk-patch xapk-merger re-doctor
+setting: ANDROID_HOME | the SDK in the default Android Studio location | Android SDK | launch-emulator kill-emulator reset-emulator apk-patch xapk-merger apk-info app-intent re-doctor
 setting: ANDROID_NDK_HOME | the newest NDK in $ANDROID_HOME/ndk | Android NDK, for your own builds |
 setting: RE_ZAP_SNAPSHOT | zap-ready | Emulator snapshot with ZAP set up, that launch-emulator boots from | launch-emulator reset-emulator re-doctor
 setting: RE_CONTAINER_ENGINE | podman, else docker | Container engine for androidcontainer | androidcontainer re-doctor

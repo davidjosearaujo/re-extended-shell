@@ -1,0 +1,329 @@
+#!/usr/bin/env bash
+# Summarise an APK's attack surface: exported components, deep links, flags, network config, signing.
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+usage() {
+    cat <<EOF
+Usage: apk-info [--all] <file.apk>
+       apk-info [-s SERIAL] [--all] <PACKAGE>
+
+A static first look at an app, read from its manifest and APK without
+decompiling it: what other apps can reach, the flags that weaken it, how it
+treats TLS, who signed it and what it's built with. Give an APK file, or the
+package name of an app installed on the device (its base APK is pulled).
+
+Output:
+  identity     package, version, SDK levels, size, SHA-256
+  signing      signature schemes and certificate (needs apksigner)
+  flags        debuggable, allowBackup, cleartext traffic, testOnly, sharedUserId
+  network      the network security config: cleartext, trusted CAs, pins
+  permissions  the ones it asks for, and the ones it declares
+  exported     components other apps can start, and what guards them
+  deep links   the URIs its activities open
+  code         dex files, native libraries, and the framework it's built with
+
+Options:
+  -s, --serial SERIAL  Device to pull the app from (optional with a single device)
+  --all                Also list the components that aren't exported
+  -h, --help           Show this help
+
+Examples:
+  apk-info app.apk
+  apk-info com.example.app       # an app installed on the device
+EOF
+}
+
+SERIAL="" ALL="" TARGET="" RE_SPLITS=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -s|--serial) re_need_arg "$1" "$#"; SERIAL="$2"; shift 2 ;;
+        --all) ALL=1; shift ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
+        *)
+            [ -z "$TARGET" ] || re_die "only one APK or package at a time."
+            TARGET="$1"; shift ;;
+    esac
+done
+[ -n "$TARGET" ] || re_usage_error "missing <file.apk> or <PACKAGE>."
+re_require_aapt2
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+if [ -f "$TARGET" ]; then
+    [ -z "$SERIAL" ] || re_die "-s only applies to a package name, $TARGET is a file."
+    re_reject_bundle "$TARGET"
+    APK="$TARGET" FROM="$TARGET" APK_SHOWN="$TARGET"
+else
+    case "$TARGET" in
+        *.[aA][pP][kK]|*/*) re_die "file not found: $TARGET" ;;
+    esac
+    re_check_package_name "$TARGET"
+    re_require adb
+    SERIAL=$(re_pick_device "apk-info -s" "$SERIAL") || exit 1
+    APK="$WORK/base.apk"
+    echo "Pulling the base APK of $TARGET from $SERIAL..." >&2
+    re_pull_base_apk "$SERIAL" "$TARGET" "$APK"
+    FROM="$TARGET on $SERIAL"
+fi
+
+TREE=$(re_apk_xmltree "$APK")
+[ -n "$TREE" ] || re_die "could not read the manifest of $FROM (not an APK?)."
+RECORDS=$(re_manifest_records <<<"$TREE")
+IFS='|' read -r _ PKG VNAME VCODE MINSDK TARGETSDK SHARED_UID < <(grep '^manifest|' <<<"$RECORDS")
+IFS='|' read -r _ DEBUGGABLE ALLOW_BACKUP CLEARTEXT NSC TEST_ONLY < <(grep '^application|' <<<"$RECORDS")
+FILES=""
+command -v unzip >/dev/null 2>&1 && FILES=$(unzip -Z1 "$APK" 2>/dev/null)
+
+# Risky values stand out
+W=$RE_C_WARN O=$RE_C_OFF
+
+# --- Identity ----------------------------------------------------------------
+re_section "Identity"
+re_row Source "$FROM"
+re_row Package "$PKG"
+re_row Version "${VNAME:-?} (code ${VCODE:-?})"
+re_row SDK "min $MINSDK, target $TARGETSDK"
+re_row Size "$(wc -c <"$APK" | tr -d ' ') bytes"
+re_row SHA-256 "$(re_hash sha256 "$APK" 2>/dev/null || echo 'no hash tool found')"
+[ -z "$RE_SPLITS" ] || re_row Splits "$RE_SPLITS"
+
+# --- Signing -----------------------------------------------------------------
+re_section "Signing"
+if APKSIGNER=$(re_find_build_tool apksigner) && SIG=$("$APKSIGNER" verify --print-certs -v "$APK" 2>&1); then
+    SCHEMES=$(sed -n 's/^Verified using \(v[0-9.]*\) scheme.*: true$/\1/p' <<<"$SIG" | tr '\n' ' ' | sed 's/ $//')
+    re_row Schemes "${SCHEMES:-none}"
+    DN=$(sed -n 's/^[^:]*Signer[^:]*: certificate DN: //p' <<<"$SIG" | head -n 1)
+    case "$DN" in
+        *"CN=Android Debug"*) re_row Certificate "$DN $W(the debug certificate)$O" ;;
+        *) re_row Certificate "${DN:-?}" ;;
+    esac
+    re_row Cert-SHA-256 "$(sed -n 's/^[^:]*Signer[^:]*: certificate SHA-256 digest: //p' <<<"$SIG" | head -n 1)"
+    if [ "$SCHEMES" = "v1" ] && [ "$MINSDK" -lt 24 ] 2>/dev/null; then
+        re_row Warning "${W}v1 signature only, on API < 24: open to Janus (CVE-2017-13156)$O"
+    fi
+elif [ -n "${APKSIGNER:-}" ]; then
+    # Its reason: the ERROR line, else the first line (of a Java exception)
+    WHY=$(grep -m 1 '^ERROR' <<<"$SIG" || head -n 1 <<<"$SIG")
+    WHY=${WHY#ERROR: }
+    re_row Signature "${W}does not verify$O (${WHY##*Exception: })"
+else
+    echo "  skipped (apksigner not found, it comes with the SDK build-tools)"
+fi
+
+# --- Flags -------------------------------------------------------------------
+re_section "Flags"
+if [ "$DEBUGGABLE" = true ]; then
+    re_row debuggable "${W}yes$O: a debugger can attach, and 'adb shell run-as $PKG' reads its data"
+else
+    re_row debuggable no
+fi
+case "$ALLOW_BACKUP" in
+    false) re_row allowBackup no ;;
+    true)  re_row allowBackup "${W}yes$O: its data can be backed up (adb backup up to Android 11)" ;;
+    *)     re_row allowBackup "${W}yes (default)$O: its data can be backed up (adb backup up to Android 11)" ;;
+esac
+case "$CLEARTEXT" in
+    true)  re_row cleartext "${W}allowed$O (usesCleartextTraffic)" ;;
+    false) re_row cleartext "not allowed (usesCleartextTraffic)" ;;
+    *)
+        if [ -n "$NSC" ]; then re_row cleartext "see the network security config"
+        elif [ "$TARGETSDK" -lt 28 ] 2>/dev/null; then re_row cleartext "${W}allowed (default before API 28)$O"
+        else re_row cleartext "not allowed (default from API 28)"; fi ;;
+esac
+[ "$TEST_ONLY" != true ] || re_row testOnly "yes (install it with 'adb install -t')"
+[ -z "$SHARED_UID" ] || re_row sharedUserId "$SHARED_UID (shares its data and permissions with the apps that set it too)"
+
+# --- Network security config -------------------------------------------------
+re_section "Network security config"
+# Its file in the APK: the resource ID resolved through the resource table
+NSC_FILE=""
+case "$NSC" in
+    @0x*)
+        NSC_FILE=$("$RE_AAPT2" dump resources "$APK" 2>/dev/null | awk -v id="resource ${NSC#@}" '
+            index($0, id " ") || $0 ~ (id "$") { found = 1; next }
+            found && /\(file\)/ { sub(/.*\(file\) /, ""); sub(/ .*/, ""); print; exit }
+            found && /^ *resource / { exit }') ;;
+esac
+if [ -z "$NSC" ]; then
+    if [ "$TARGETSDK" -lt 24 ] 2>/dev/null; then
+        echo "  none: trusts system and ${W}user-installed$O CAs (default before API 24)"
+    else
+        echo "  none: trusts system CAs only (default from API 24), no pinning"
+    fi
+elif [ -z "$NSC_FILE" ] || ! NSC_TREE=$(re_apk_xmltree "$APK" "$NSC_FILE") || [ -z "$NSC_TREE" ]; then
+    echo "  $NSC (could not be read)"
+else
+    re_row File "$NSC_FILE"
+    # One line per config: base, debug-overrides, or the domains of a domain-config
+    awk -v debuggable="$DEBUGGABLE" -v target="$TARGETSDK" -v warn="$W" -v off="$O" "$RE_AWK_LIB"'
+        function bad(s) { return warn s off }
+        function flush(   line, t, label) {
+            if (cur == "") return
+            if (cur == "base-config") { label = "base"; seenbase = 1 }
+            else if (cur == "debug-overrides") label = "debug-overrides" (debuggable == "true" ? " (active: debuggable)" : " (inactive: not debuggable)")
+            else label = (doms == "" ? "domains" : doms)
+            line = ""
+            if (clear != "") line = "cleartext " (clear == "true" ? bad("allowed") : "not allowed")
+            if (anchors != "") {
+                t = anchors
+                if (t ~ /user/ && (cur != "debug-overrides" || debuggable == "true")) t = bad(t)
+                line = line (line == "" ? "" : ", ") "trusts " t
+            }
+            if (pins) line = line (line == "" ? "" : ", ") "pinned (" pins " pin" (pins > 1 ? "s" : "") (expires != "" ? ", expire " expires : "") ")"
+            if (override) line = line ", " bad("overridePins")
+            printf "  %s: %s\n", label, (line == "" ? "(inherits)" : line)
+            cur = ""
+        }
+        {
+            xt($0)
+            if (XT == "E") {
+                if (XN ~ /^(base-config|domain-config|debug-overrides)$/) {
+                    flush(); cur = XN; doms = clear = anchors = expires = ""; pins = override = 0
+                }
+                el = XN
+                if (el == "pin") pins++
+                if (el == "domain") subs = 0
+            } else if (XT == "A") {
+                if (XK == "cleartextTrafficPermitted" && el ~ /config$/) clear = bool(XV)
+                else if (el == "certificates" && XK == "src") anchors = anchors (anchors == "" ? "" : " ") (XV ~ /^@/ ? "an embedded CA" : XV)
+                else if (el == "certificates" && XK == "overridePins" && bool(XV) == "true") override = 1
+                else if (el == "pin-set" && XK == "expiration") expires = XV
+                else if (el == "domain" && XK == "includeSubdomains" && bool(XV) == "true") subs = 1
+            } else if (XT == "T" && el == "domain") {
+                doms = doms (doms == "" ? "" : ", ") (subs ? "*." : "") XV
+            }
+        }
+        END {
+            flush()
+            if (!seenbase) printf "  base (default): cleartext %s, trusts system%s\n", \
+                (target < 28 ? bad("allowed") : "not allowed"), (target < 24 ? " " bad("user") : "")
+        }' <<<"$NSC_TREE"
+fi
+
+# --- Permissions, components, deep links -------------------------------------
+# One pass over the records, however many components there are
+SENSITIVE=' ACCESS_BACKGROUND_LOCATION ACCESS_COARSE_LOCATION ACCESS_FINE_LOCATION BIND_ACCESSIBILITY_SERVICE BIND_DEVICE_ADMIN BIND_NOTIFICATION_LISTENER_SERVICE BODY_SENSORS CALL_PHONE CAMERA GET_ACCOUNTS MANAGE_EXTERNAL_STORAGE PACKAGE_USAGE_STATS QUERY_ALL_PACKAGES READ_CALENDAR READ_CALL_LOG READ_CONTACTS READ_EXTERNAL_STORAGE READ_MEDIA_AUDIO READ_MEDIA_IMAGES READ_MEDIA_VIDEO READ_PHONE_NUMBERS READ_PHONE_STATE READ_SMS RECEIVE_SMS RECORD_AUDIO REQUEST_INSTALL_PACKAGES SEND_SMS SYSTEM_ALERT_WINDOW WRITE_CALENDAR WRITE_CALL_LOG WRITE_CONTACTS WRITE_EXTERNAL_STORAGE WRITE_SETTINGS '
+awk -F'|' -v pkg="$PKG" -v all="$ALL" -v warn="$W" -v off="$O" -v sensitive="$SENSITIVE" "$RE_AWK_LIB"'
+    function bad(s) { return warn s off }
+    function section(t) { printf "\n== %s ==\n", t }
+    function hex(s,   i, n) {
+        s = tolower(substr(s, 3)); n = 0
+        for (i = 1; i <= length(s); i++) n = n * 16 + index("0123456789abcdef", substr(s, i, 1)) - 1
+        return n
+    }
+    # The protection level of permission P, in words: from the app, if it
+    # declares it, else from Android naming conventions. Risky ones stand out.
+    function level(p,   l) {
+        if (p in declared) {
+            l = declared[p]
+            if (l ~ /^0x/) l = hex(l) % 16
+            if (l == "0" || l == "normal") return bad("normal, any app can get it")
+            if (l == "1" || l == "dangerous") return bad("dangerous, any app can ask for it")
+            if (l == "2" || l == "signature") return "signature"
+            if (l == "3" || l == "signatureOrSystem") return "signature or system"
+            return l
+        }
+        return p ~ /^android\.permission\.BIND_/ ? "system" : ""
+    }
+    function show(i,   f, guard, n, p, k, l) {
+        split(comp[i], f, "|")
+        guard = ""
+        n = split(f[6] " " f[7] " " f[8], p, " ")
+        for (k = 1; k <= n; k++) { l = level(p[k]); guard = guard (guard == "" ? "" : ", ") "permission " p[k] (l != "" ? " (" l ")" : "") }
+        if (guard == "" && f[12] != "") guard = "no permission (as every launcher activity)"
+        else if (guard == "" && f[5] == "yes") guard = bad("no permission")
+        if (f[5] == "no") guard = "not exported" (guard == "" ? "" : ", " guard)
+        if (f[5] == "?") guard = "exported set by a resource" (guard == "" ? "" : ", " guard)
+        printf "  %-3s %-14s %s%s\n", f[2], f[3], short(f[4]), (f[12] != "" ? "  (launcher)" : "")
+        printf "      %s\n", guard
+        if (f[13] != "") printf "      alias of %s\n", short(f[13])
+        if (f[9] != "") { l = f[9]; gsub(/;/, " content://", l); printf "      content://%s\n", l }
+        if (f[10] != "" && f[10] != "android.intent.action.MAIN") printf "      actions: %s\n", f[10]
+        if (f[11] != "") printf "      links: %s\n", f[11]
+    }
+    $1 == "uses-permission" && !($2 in seen) { seen[$2] = 1; up[++nu] = $2 }
+    $1 == "permission" { declared[$2] = $3; dp[++nd] = $2 }
+    $1 == "component" { comp[++nc] = $0; if ($5 != "no") nexp++ }
+    END {
+        # The permissions, sorted (insertion sort: a few dozen at most)
+        for (i = 2; i <= nu; i++) { v = up[i]; for (j = i - 1; j > 0 && up[j] > v; j--) up[j + 1] = up[j]; up[j + 1] = v }
+        section("Permissions")
+        if (!nu) print "  (none)"
+        for (i = 1; i <= nu; i++) {
+            p = up[i]; s = p; sub(/^android\.permission\./, "", s)
+            if (index(sensitive, " " s " ")) printf "  %s (sensitive)\n", bad(p); else printf "  %s\n", p
+        }
+        if (nd) print " Declared by the app"
+        for (i = 1; i <= nd; i++) { l = level(dp[i]); printf "  %s (%s)\n", dp[i], (l == "" ? "?" : l) }
+
+        section("Exported components (" nexp + 0 " of " nc + 0 ")")
+        if (!nexp) print "  (none)"
+        for (i = 1; i <= nc; i++) { split(comp[i], f, "|"); if (f[5] != "no") show(i) }
+        if (nexp) print "  Start one with: app-intent " pkg " <N>"
+        if (all != "") {
+            section("Other components (" nc - nexp ")")
+            if (nc == nexp) print "  (none)"
+            for (i = 1; i <= nc; i++) { split(comp[i], f, "|"); if (f[5] == "no") show(i) }
+            if (nc > nexp) print "  As root, these can be started too: app-intent --root " pkg " <N>"
+        }
+
+        section("Deep links")
+        nl = 0
+        for (i = 1; i <= nc; i++) {
+            split(comp[i], f, "|")
+            if (f[5] == "no" || f[11] == "") continue
+            n = split(f[11], lk, " ")
+            for (k = 1; k <= n; k++) if (lk[k] !~ /^type:/) { printf "  %s  -> %s\n", lk[k], short(f[4]); nl++ }
+        }
+        if (!nl) print "  (none)"
+        else print "  Open one with: app-intent " pkg " --data '\''<URI>'\''"
+    }' <<<"$RECORDS"
+
+# --- Code --------------------------------------------------------------------
+re_section "Code"
+if ! command -v unzip >/dev/null 2>&1; then
+    echo "  skipped (unzip not found)"
+elif [ -z "$FILES" ]; then
+    echo "  skipped (could not list the files in the APK)"
+else
+    re_row Dex "$(grep -c '^classes[0-9]*\.dex$' <<<"$FILES") file(s)"
+    FRAMEWORK=""
+    has() { grep -qE "$1" <<<"$FILES"; }
+    if has '^lib/[^/]+/libflutter\.so$|^assets/flutter_assets/'; then
+        FRAMEWORK="Flutter: the app's code is Dart, compiled into lib/*/libapp.so (jadx won't show it)"
+    elif has '^assets/index\.android\.bundle$'; then
+        FRAMEWORK="React Native: the app's code is JavaScript in assets/index.android.bundle"
+        has '^lib/[^/]+/libhermes' && FRAMEWORK="$FRAMEWORK (Hermes bytecode)"
+    elif has '^lib/[^/]+/lib(monodroid|monosgen)'; then
+        FRAMEWORK="Xamarin / .NET MAUI: the app's code is .NET assemblies"
+    elif has '^lib/[^/]+/libil2cpp\.so$'; then
+        FRAMEWORK="Unity (IL2CPP): the game's code is native, in lib/*/libil2cpp.so with assets/bin/Data/Managed/Metadata/global-metadata.dat"
+    elif has '^lib/[^/]+/libunity\.so$'; then
+        FRAMEWORK="Unity (Mono): the game's code is .NET assemblies in assets/bin/Data/Managed/"
+    elif has '^assets/public/(cordova\.js|index\.html)$' && has '^assets/capacitor'; then
+        FRAMEWORK="Capacitor: the app's code is web code in assets/public/"
+    elif has '^assets/www/(cordova\.js|index\.html)$'; then
+        FRAMEWORK="Cordova: the app's code is web code in assets/www/"
+    fi
+    re_row Framework "${FRAMEWORK:-none detected (plain Java/Kotlin)}"
+    ABIS=$(sed -n 's#^lib/\([^/]*\)/[^/]*\.so$#\1#p' <<<"$FILES" | sort -u | tr '\n' ' ' | sed 's/ $//')
+    if [ -z "$ABIS" ]; then
+        re_row Native "none${RE_SPLITS:+ in the base APK (see the config splits)}"
+    else
+        LIBS=$(sed -n 's#^lib/[^/]*/\([^/]*\.so\)$#\1#p' <<<"$FILES" | sort -u)
+        NLIBS=$(grep -c . <<<"$LIBS")
+        SHOWN=$(head -n 12 <<<"$LIBS" | tr '\n' ' ' | sed 's/ $//')
+        [ "$NLIBS" -le 12 ] || SHOWN="$SHOWN ... ($((NLIBS - 12)) more)"
+        re_row ABIs "$ABIS"
+        re_row Native "$NLIBS librar$([ "$NLIBS" = 1 ] && echo y || echo ies): $SHOWN"
+        echo "  Triage one with: unzip -p ${APK_SHOWN:-<apk>} lib/${ABIS%% *}/<lib>.so > lib.so && bin-triage lib.so"
+    fi
+fi

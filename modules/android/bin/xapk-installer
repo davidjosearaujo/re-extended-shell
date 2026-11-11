@@ -73,17 +73,14 @@ trap 'echo "Cleaning up temporary files..."; rm -rf "$TMP_DIR"' EXIT
 echo "Extracting '$XAPK_FILE' to temporary directory..."
 unzip -q "$XAPK_FILE" -d "$TMP_DIR" || re_die "failed to extract the archive."
 
-APK_FILES=()
-while IFS= read -r -d $'\0'; do
-    APK_FILES+=("$REPLY")
-done < <(find "$TMP_DIR" -name "*.apk" -print0)
+re_find_apks "$TMP_DIR"
+APK_FILES=(${RE_APKS[@]+"${RE_APKS[@]}"})
 
 [ ${#APK_FILES[@]} -gt 0 ] || re_die "no APK files found inside the archive."
 
 echo "Installing ${#APK_FILES[@]} APK(s) on $DEVICE_SERIAL (adb install-multiple)..."
 "${ADB_CMD[@]}" install-multiple "${APK_FILES[@]}" || re_die "the installation failed."
 echo "Installed on $DEVICE_SERIAL."
-
 
 # Handle OBB Data
 if [ -d "$TMP_DIR/Android/obb" ]; then

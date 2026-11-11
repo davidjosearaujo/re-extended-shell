@@ -170,8 +170,41 @@ re_help() {
     echo "RE Extended Shell $(re_version). All commands: re-extended-shell --commands"
 }
 
+# --- Reports (bin-triage, apk-info, app-data) ---------------------------------
+# A "== Title ==" section, then "  Label        value" rows and lists.
+re_section() { printf '\n== %s ==\n' "$1"; }
+# Usage: re_row LABEL VALUE
+re_row() { printf '  %-12s %s\n' "$1" "$2"; }
+# Prints stdin's non-empty lines indented, at most LIMIT of them (default 15)
+# and then how many more there are, or "(none)".
+# Usage: ... | re_list [LIMIT]
+re_list() {
+    awk -v limit="${1:-15}" '
+        NF { n++; if (n <= limit) print "  " substr($0, 1, 160) }
+        END { if (!n) print "  (none)"; else if (n > limit) print "  ... and " n - limit " more" }'
+}
+
 # Shortens $HOME to ~ for display
 re_tilde() { case "$1" in "$HOME"/*) echo "~${1#"$HOME"}" ;; *) echo "$1" ;; esac; }
+
+# Prints the hex digest of FILE: md5, sha1 or sha256. Uses whichever of the
+# GNU (md5sum, sha256sum), BSD/macOS (md5, shasum) or openssl tools exists.
+# Usage: re_hash md5|sha1|sha256 FILE
+re_hash() {
+    local ALGO="$1" FILE="$2" N
+    case "$ALGO" in sha1) N=1 ;; sha256) N=256 ;; esac
+    if command -v "${ALGO}sum" >/dev/null 2>&1; then
+        "${ALGO}sum" "$FILE" | awk '{ print $1 }'
+    elif [ "$ALGO" = md5 ] && command -v md5 >/dev/null 2>&1; then
+        md5 -q "$FILE"
+    elif [ -n "${N:-}" ] && command -v shasum >/dev/null 2>&1; then
+        shasum -a "$N" "$FILE" | awk '{ print $1 }'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst "-$ALGO" -r "$FILE" | awk '{ print $1 }'
+    else
+        return 1
+    fi
+}
 
 # Downloads URL to DEST through DEST.part, so a failed or interrupted download
 # never leaves a half-written file (or damages an existing one). Creates DEST's

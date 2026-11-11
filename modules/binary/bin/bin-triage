@@ -51,15 +51,8 @@ case "$MINLEN$LIMIT" in ""|*[!0-9]*) re_die "-n and -l take a number." ;; esac
 case "$FILE" in -*) FILE="./$FILE" ;; esac
 re_require file strings
 
-section() { printf '\n== %s ==\n' "$1"; }
-# row LABEL VALUE
-row() { printf '  %-12s %s\n' "$1" "$2"; }
-# Reads lines on stdin; prints the first LIMIT unique ones indented, with a count of the rest
-list_lines() {
-    sort -u | awk -v limit="$LIMIT" '
-        NF { n++; if (n <= limit) print "  " substr($0, 1, 160) }
-        END { if (!n) print "  (none)"; else if (n > limit) print "  ... and " n - limit " more" }'
-}
+# The first LIMIT unique lines of stdin, indented, with a count of the rest
+list_lines() { sort -u | re_list "$LIMIT"; }
 
 INFO=$(file -bL "$FILE")
 case "$INFO" in
@@ -70,16 +63,16 @@ case "$INFO" in
 esac
 
 # --- Identity ----------------------------------------------------------------
-section "Identity"
-row File "$FILE"
-row Type "$INFO"
-row Size "$(wc -c <"$FILE" | tr -d ' ') bytes"
+re_section "Identity"
+re_row File "$FILE"
+re_row Type "$INFO"
+re_row Size "$(wc -c <"$FILE" | tr -d ' ') bytes"
 for H in MD5:md5 SHA1:sha1 SHA256:sha256; do
-    row "${H%%:*}" "$(re_hash "${H#*:}" "$FILE" || echo 'no hash tool found')"
+    re_row "${H%%:*}" "$(re_hash "${H#*:}" "$FILE" || echo 'no hash tool found')"
 done
 
 # --- Entropy -----------------------------------------------------------------
-section "Entropy"
+re_section "Entropy"
 if command -v python3 >/dev/null 2>&1; then
     # Pure Python counts about 20 MB/s, so a big file is read as 16 blocks of
     # 1 MiB spread over it: a few seconds at most, close enough for triage
@@ -102,9 +95,9 @@ e = -sum(n / total * math.log2(n / total) for n in counts if n) if total else 0.
 verdict = "high, likely packed or encrypted" if e >= 7.2 else "elevated, compressed data or a packer?" if e >= 6.6 else "normal"
 print("%.2f bits/byte (%s%s)" % (e, verdict, ", sampled" if sampled else ""))
 ' "$FILE" 2>/dev/null)
-    row Entropy "${ENTROPY:-could not be computed}"
+    re_row Entropy "${ENTROPY:-could not be computed}"
 else
-    row Entropy "skipped (needs python3)"
+    re_row Entropy "skipped (needs python3)"
 fi
 
 # --- Format-specific parts ---------------------------------------------------
@@ -112,7 +105,7 @@ fi
 IMPORTS_UNIX='system|popen|execl|execle|execlp|execv|execve|execvp|fork|vfork|ptrace|dlopen|dlsym|mprotect|mmap|syscall|prctl|setuid|setgid|chroot|chmod|getenv|gets|strcpy|strcat|sprintf|vsprintf|scanf|socket|connect|bind|listen|accept|gethostbyname|getaddrinfo|inet_addr|SSL_connect|SSL_CTX_set_verify|curl_easy_perform|unlink'
 IMPORTS_WIN='CreateRemoteThread|WriteProcessMemory|ReadProcessMemory|VirtualAlloc|VirtualAllocEx|VirtualProtect|LoadLibraryA|LoadLibraryW|GetProcAddress|IsDebuggerPresent|CheckRemoteDebuggerPresent|URLDownloadToFileA|URLDownloadToFileW|InternetOpenA|InternetOpenW|InternetOpenUrlA|InternetOpenUrlW|WinExec|ShellExecuteA|ShellExecuteW|CreateProcessA|CreateProcessW|RegSetValueExA|RegSetValueExW|RegCreateKeyExA|RegCreateKeyExW|CryptEncrypt|CryptDecrypt|OpenProcess|NtUnmapViewOfSection|SetWindowsHookExA|SetWindowsHookExW|CreateServiceA|CreateServiceW|AdjustTokenPrivileges|WSAStartup|connect|send|recv'
 
-note_missing() { section "$1"; echo "  skipped ($2 not found)"; }
+note_missing() { re_section "$1"; echo "  skipped ($2 not found)"; }
 
 elf_report() {
     local ALL V IMPORTS
@@ -121,37 +114,37 @@ elf_report() {
     # patterns below are specific to each part
     ALL=$(readelf -W -h -l -d -s "$FILE" 2>/dev/null)
 
-    section "Hardening (ELF)"
-    row Machine "$(sed -n 's/^ *Machine: *//p' <<<"$ALL")"
+    re_section "Hardening (ELF)"
+    re_row Machine "$(sed -n 's/^ *Machine: *//p' <<<"$ALL")"
     case "$(sed -n 's/^ *Type: *\([A-Z]*\).*/\1/p' <<<"$ALL")" in
         DYN)  V="yes (position independent, or a shared library)" ;;
         EXEC) V="no (fixed load address)" ;;
         *)    V="unknown" ;;
     esac
-    row PIE "$V"
+    re_row PIE "$V"
     if grep -q GNU_STACK <<<"$ALL"; then
         if grep GNU_STACK <<<"$ALL" | grep -q RWE; then V="no (executable stack)"; else V="yes"; fi
     else
         V="unknown (no GNU_STACK header, the stack may be executable)"
     fi
-    row NX "$V"
+    re_row NX "$V"
     if ! grep -q GNU_RELRO <<<"$ALL"; then V=no
     elif grep -qE '\(BIND_NOW\)|\(FLAGS(_1)?\).*NOW' <<<"$ALL"; then V=full
     else V="partial"; fi
-    row RELRO "$V"
+    re_row RELRO "$V"
     if grep -q '__stack_chk_fail' <<<"$ALL"; then V=yes; else V=no; fi
-    row Canary "$V"
+    re_row Canary "$V"
     if grep -qE ' __[a-z_0-9]+_chk(@|$| )' <<<"$ALL"; then V=yes; else V=no; fi
-    row Fortify "$V"
+    re_row Fortify "$V"
     case "$INFO" in *"not stripped"*) V="no (symbols present)" ;; *stripped*) V=yes ;; *) V=unknown ;; esac
-    row Stripped "$V"
-    case "$INFO" in *"statically linked"*) row Linking "static" ;; *) row Linking "dynamic" ;; esac
+    re_row Stripped "$V"
+    case "$INFO" in *"statically linked"*) re_row Linking "static" ;; *) re_row Linking "dynamic" ;; esac
 
-    section "Libraries"
+    re_section "Libraries"
     sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' <<<"$ALL" | list_lines
     # Imports: undefined symbols, minus their @version suffix
     IMPORTS=$(awk '$7 == "UND" && $8 != "" { sub(/@.*/, "", $8); print $8 }' <<<"$ALL")
-    section "Notable imports"
+    re_section "Notable imports"
     grep -xE "$IMPORTS_UNIX" <<<"$IMPORTS" | list_lines
 }
 
@@ -162,18 +155,18 @@ macho_report() {
     LOADS=$(otool -l "$FILE" 2>/dev/null)
     # Imported symbols, without the leading underscores Mach-O adds
     UNDEF=$(nm -u "$FILE" 2>/dev/null | sed 's/^ *_*//')
-    section "Hardening (Mach-O)"
-    if grep -qw PIE <<<"$ALL"; then V=yes; else V=no; fi
-    row PIE "$V"
+    re_section "Hardening (Mach-O)"
+    if grep -qw PIE <<<"$HDR"; then V=yes; else V=no; fi
+    re_row PIE "$V"
     if grep -qx 'stack_chk_fail' <<<"$UNDEF"; then V=yes; else V=no; fi
-    row Canary "$V"
+    re_row Canary "$V"
     if grep -q LC_CODE_SIGNATURE <<<"$LOADS"; then V=yes; else V=no; fi
-    row Signed "$V"
+    re_row Signed "$V"
     if grep -A4 LC_ENCRYPTION_INFO <<<"$LOADS" | grep -q 'cryptid 1'; then V="yes (encrypted, decrypt it before analysis)"; else V=no; fi
-    row Encrypted "$V"
-    section "Libraries"
+    re_row Encrypted "$V"
+    re_section "Libraries"
     otool -L "$FILE" 2>/dev/null | tail -n +2 | awk '{ print $1 }' | list_lines
-    section "Notable imports"
+    re_section "Notable imports"
     grep -xE "$IMPORTS_UNIX" <<<"$UNDEF" | list_lines
 }
 
@@ -181,20 +174,20 @@ pe_report() {
     local DUMP HEX CHARS V
     if ! command -v objdump >/dev/null 2>&1; then note_missing "PE details" objdump; return; fi
     DUMP=$(objdump -p "$FILE" 2>/dev/null)
-    section "Hardening (PE)"
+    re_section "Hardening (PE)"
     HEX=$(awk '$1 == "DllCharacteristics" { print $2; exit }' <<<"$DUMP")
     if [ -n "$HEX" ]; then
         CHARS=$((16#$HEX))
         for FLAG in "ASLR:64" "DEP:256" "ControlFlow:16384"; do
             if [ $((CHARS & ${FLAG#*:})) -ne 0 ]; then V=yes; else V=no; fi
-            row "${FLAG%%:*}" "$V"
+            re_row "${FLAG%%:*}" "$V"
         done
     else
-        row Flags "not found in the PE header"
+        re_row Flags "not found in the PE header"
     fi
-    section "Libraries"
+    re_section "Libraries"
     sed -n 's/^[[:space:]]*DLL Name: //p' <<<"$DUMP" | list_lines
-    section "Notable imports"
+    re_section "Notable imports"
     grep -owE "$IMPORTS_WIN" <<<"$DUMP" | list_lines
 }
 
@@ -202,13 +195,13 @@ case "$KIND" in
     ELF) elf_report ;;
     Mach-O) macho_report ;;
     PE) pe_report ;;
-    *) section "Format"; echo "  Not an ELF, Mach-O or PE file: only the generic parts apply." ;;
+    *) re_section "Format"; echo "  Not an ELF, Mach-O or PE file: only the generic parts apply." ;;
 esac
 
 # --- Strings -----------------------------------------------------------------
 STR=$(strings -a -n "$MINLEN" "$FILE" 2>/dev/null)
-section "Strings (at least $MINLEN characters)"
-row Count "$(grep -c . <<<"$STR")"
+re_section "Strings (at least $MINLEN characters)"
+re_row Count "$(grep -c . <<<"$STR")"
 echo " URLs"
 grep -Eo "https?://[A-Za-z0-9._~:/?#@!\$&()*+,;=%-]+" <<<"$STR" | list_lines
 echo " IP addresses"
