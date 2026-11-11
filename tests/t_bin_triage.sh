@@ -96,6 +96,48 @@ EOF
     fi
 fi
 
+# Strings: stringx when installed, else binutils strings. NOSX is PATH
+# without stringx, to test the fallback on any machine.
+NOSX=""
+while IFS= read -r D; do [ -x "$D/stringx" ] || NOSX="$NOSX${NOSX:+:}$D"; done < <(tr ':' '\n' <<<"$PATH")
+{
+    printf 'plain http://plain.example/a here\000'
+    printf 'h\000t\000t\000p\000:\000/\000/\000w\000i\000d\000e\000.\000e\000x\000a\000m\000p\000l\000e\000/\000x\000\000\000'
+    printf 'token ghp_abcdefghijklmnopqrstuvwxyz0123456789 end\000'
+    printf 'cfg=%s\000' "$(printf 'see http://hidden.example/c2' | gzip | base64 | tr -d '\n')"
+} >"$T_DIR/hidden.bin"
+
+PATH="$NOSX" run bin-triage "$T_DIR/hidden.bin"
+expect_rc 0 "without stringx: runs on binutils strings"
+expect_out "ASCII only: install stringx" "...says what's missing"
+expect_out "http://plain.example/a" "...finds plain URLs"
+expect_no_out "http://wide.example/x" "...but not UTF-16 ones"
+expect_out "skipped (needs stringx)" "...and skips decoding"
+PATH="$NOSX" run bin-triage --xor "$T_DIR/hidden.bin"
+expect_out "--decode and --xor need stringx" "--xor without stringx is refused"
+
+if command -v stringx >/dev/null 2>&1; then
+    run bin-triage "$T_DIR/hidden.bin"
+    expect_out "ASCII and UTF-16, read by stringx" "with stringx: reads ASCII and UTF-16"
+    expect_out "http://wide.example/x" "...finds UTF-16 URLs"
+    expect_out "ghp_abcdefghijklmnopqrstuvwxyz0123456789" "...uses its secret patterns"
+    expect_out "base64@" "...decodes, showing the chain"
+    expect_out "> gzip: see http://hidden.example/c2" "...through gzip"
+    DECODED=$(sed -n '/Decoded strings/,$p' <<<"$OUT")
+    grep -q plain.example <<<"$DECODED" && fail "...listing only decoded hits there" "$DECODED" \
+        || pass "...listing only decoded hits there"
+    expect_out "single-byte XOR not tried: add --xor" "...and says XOR wasn't tried"
+    # The URL XORed with 0x5a, between 0x5a bytes (they XOR to NULs, which
+    # end the string)
+    { printf '\132\132'; printf 'http://xored.example/beacon' | od -An -v -tu1 | LC_ALL=C awk '
+        function bxor(a, b,   r, i) { r = 0; for (i = 1; i < 256; i *= 2) { if ((int(a / i) % 2) != (int(b / i) % 2)) r += i }; return r }
+        { for (i = 1; i <= NF; i++) printf "%c", bxor($i, 90) }'; printf '\132\132'; } >"$T_DIR/xor.bin"
+    run bin-triage --xor "$T_DIR/xor.bin"
+    expect_out "xor(0x5a): http://xored.example/beacon" "--xor finds XOR-obfuscated strings"
+else
+    skip "bin-triage with stringx" "stringx not installed"
+fi
+
 run bin-triage "$T_DIR/nope"
 expect_rc 1 "a missing file is an error"
 run bin-triage -n x "$T_DIR/sample.txt"

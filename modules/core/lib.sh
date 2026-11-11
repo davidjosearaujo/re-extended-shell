@@ -184,6 +184,26 @@ re_list() {
         END { if (!n) print "  (none)"; else if (n > limit) print "  ... and " n - limit " more" }'
 }
 
+# --- Strings and secrets -------------------------------------------------------
+# Words that name a secret, for grep -E (case-insensitive): the lines of text
+# worth a look in a binary or an app's files
+# shellcheck disable=SC2034  # used by the scripts that source this file
+RE_SECRET_WORDS='passw(or)?d|secret|token|api[_-]?key|credential|bearer|private[_-]?key'
+
+# Runs stringx with the given arguments and prints each hit as "WHERE: STRING",
+# WHERE being the file and, for a decoded hit, the decoding chain after it
+# (app.bin->base64@193->gzip). Fails, printing nothing, if stringx isn't
+# installed: callers fall back to binutils strings or grep.
+# Usage: re_stringx [STRINGX ARGS...] FILE...
+re_stringx() {
+    command -v stringx >/dev/null 2>&1 || return 1
+    stringx --color=never "$@" 2>/dev/null | awk '
+        match($0, /:[0-9]+:[0-9]+:/) {
+            where = substr($0, 1, RSTART - 1); sub(/^[ \t]+/, "", where)
+            print where ": " substr($0, RSTART + RLENGTH)
+        }'
+}
+
 # Shortens $HOME to ~ for display
 re_tilde() { case "$1" in "$HOME"/*) echo "~${1#"$HOME"}" ;; *) echo "$1" ;; esac; }
 

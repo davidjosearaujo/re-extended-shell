@@ -7,7 +7,13 @@
 
 doc_section "Binary: tools"
 doc_tool required file "bin-triage" "Install your distribution's 'file' package." || true
-doc_tool required strings "bin-triage" "Install binutils (Linux) or the Xcode command line tools (macOS)." || true
+# stringx reads the strings when installed; binutils strings is the fallback
+if doc_tool optional stringx "bin-triage (UTF-16 strings, secret patterns, decoding) and app-data (keys in binary files)" \
+        "Put stringx on your PATH; until then bin-triage uses binutils strings (ASCII only)."; then
+    doc_info "$(stringx --version 2>/dev/null)"
+else
+    doc_tool required strings "bin-triage, as stringx isn't installed" "Install binutils (Linux) or the Xcode command line tools (macOS)." || true
+fi
 # What reads each file format
 doc_tool optional readelf "bin-triage on ELF files" "Install binutils." || true
 doc_tool optional objdump "bin-triage on PE files" "Install binutils." || true

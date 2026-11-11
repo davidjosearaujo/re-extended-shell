@@ -10,7 +10,7 @@ done
 
 usage() {
     cat <<EOF
-Usage: bin-triage [-n LENGTH] [-l LIMIT] <file>
+Usage: bin-triage [-n LENGTH] [-l LIMIT] [--decode] [--xor] <file>
 
 A first look at an ELF, Mach-O or PE file (other files get the generic parts).
 Read-only: the file is never run or changed.
@@ -25,19 +25,31 @@ Output:
   imports    the ones that matter: exec, network, memory, anti-debugging, ...
   strings    URLs, IP addresses, e-mail addresses, paths, keys and
              password-like words found in its printable strings
+  decoded    URLs, addresses and keys hidden in Base64, hex, gzip or zlib
+             data (needs stringx)
+
+Strings are read with stringx when it's installed: ASCII and UTF-16 (common
+in Windows binaries), its secret patterns, and decoding. Without it, binutils
+'strings' reads ASCII only and nothing is decoded.
 
 Options:
   -n, --min-length LENGTH  Shortest string to consider (default: 8)
   -l, --limit LIMIT        Most lines shown per list (default: 10)
+  --decode                 Decode on files over 32 MiB too (skipped there by
+                           default: it takes about 1s per 8 MiB)
+  --xor                    Also try every single-byte XOR key (needs stringx;
+                           slow, about 1s per MiB)
   -h, --help               Show this help
 EOF
 }
 
-MINLEN=8 LIMIT=10 FILE=""
+MINLEN=8 LIMIT=10 FILE="" DECODE="" XOR=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -n|--min-length) re_need_arg "$1" "$#"; MINLEN="$2"; shift 2 ;;
         -l|--limit)      re_need_arg "$1" "$#"; LIMIT="$2"; shift 2 ;;
+        --decode) DECODE=1; shift ;;
+        --xor)    XOR=1; shift ;;
         -h|--help) re_help; exit 0 ;;
         -*) re_unknown_option "$1" ;;
         *)
@@ -49,7 +61,17 @@ done
 case "$MINLEN$LIMIT" in ""|*[!0-9]*) re_die "-n and -l take a number." ;; esac
 [ -f "$FILE" ] || re_die "file not found: $FILE"
 case "$FILE" in -*) FILE="./$FILE" ;; esac
-re_require file strings
+# stringx when installed, else binutils strings
+STRINGX=""
+command -v stringx >/dev/null 2>&1 && STRINGX=1
+[ -n "$STRINGX" ] || [ -z "$DECODE$XOR" ] || re_die "--decode and --xor need stringx, which isn't installed."
+re_require file
+[ -n "$STRINGX" ] || re_require strings
+SIZE=$(wc -c <"$FILE" | tr -d ' ')
+# The big outputs (readelf's, the strings) go to files that grep and awk read
+# directly: a here-string copies megabytes each time it's used
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
 
 # The first LIMIT unique lines of stdin, indented, with a count of the rest
 list_lines() { sort -u | re_list "$LIMIT"; }
@@ -66,7 +88,7 @@ esac
 re_section "Identity"
 re_row File "$FILE"
 re_row Type "$INFO"
-re_row Size "$(wc -c <"$FILE" | tr -d ' ') bytes"
+re_row Size "$SIZE bytes"
 for H in MD5:md5 SHA1:sha1 SHA256:sha256; do
     re_row "${H%%:*}" "$(re_hash "${H#*:}" "$FILE" || echo 'no hash tool found')"
 done
@@ -108,42 +130,42 @@ IMPORTS_WIN='CreateRemoteThread|WriteProcessMemory|ReadProcessMemory|VirtualAllo
 note_missing() { re_section "$1"; echo "  skipped ($2 not found)"; }
 
 elf_report() {
-    local ALL V IMPORTS
+    local ELF="$WORK/readelf" V IMPORTS
     if ! command -v readelf >/dev/null 2>&1; then note_missing "ELF details" readelf; return; fi
     # Header, program headers, dynamic section and symbols in one pass; the
     # patterns below are specific to each part
-    ALL=$(readelf -W -h -l -d -s "$FILE" 2>/dev/null)
+    readelf -W -h -l -d -s "$FILE" >"$ELF" 2>/dev/null
 
     re_section "Hardening (ELF)"
-    re_row Machine "$(sed -n 's/^ *Machine: *//p' <<<"$ALL")"
-    case "$(sed -n 's/^ *Type: *\([A-Z]*\).*/\1/p' <<<"$ALL")" in
+    re_row Machine "$(sed -n 's/^ *Machine: *//p' "$ELF")"
+    case "$(sed -n 's/^ *Type: *\([A-Z]*\).*/\1/p' "$ELF")" in
         DYN)  V="yes (position independent, or a shared library)" ;;
         EXEC) V="no (fixed load address)" ;;
         *)    V="unknown" ;;
     esac
     re_row PIE "$V"
-    if grep -q GNU_STACK <<<"$ALL"; then
-        if grep GNU_STACK <<<"$ALL" | grep -q RWE; then V="no (executable stack)"; else V="yes"; fi
+    if grep -q GNU_STACK "$ELF"; then
+        if grep GNU_STACK "$ELF" | grep -q RWE; then V="no (executable stack)"; else V="yes"; fi
     else
         V="unknown (no GNU_STACK header, the stack may be executable)"
     fi
     re_row NX "$V"
-    if ! grep -q GNU_RELRO <<<"$ALL"; then V=no
-    elif grep -qE '\(BIND_NOW\)|\(FLAGS(_1)?\).*NOW' <<<"$ALL"; then V=full
+    if ! grep -q GNU_RELRO "$ELF"; then V=no
+    elif grep -qE '\(BIND_NOW\)|\(FLAGS(_1)?\).*NOW' "$ELF"; then V=full
     else V="partial"; fi
     re_row RELRO "$V"
-    if grep -q '__stack_chk_fail' <<<"$ALL"; then V=yes; else V=no; fi
+    if grep -q '__stack_chk_fail' "$ELF"; then V=yes; else V=no; fi
     re_row Canary "$V"
-    if grep -qE ' __[a-z_0-9]+_chk(@|$| )' <<<"$ALL"; then V=yes; else V=no; fi
+    if grep -qE ' __[a-z_0-9]+_chk(@|$| )' "$ELF"; then V=yes; else V=no; fi
     re_row Fortify "$V"
     case "$INFO" in *"not stripped"*) V="no (symbols present)" ;; *stripped*) V=yes ;; *) V=unknown ;; esac
     re_row Stripped "$V"
     case "$INFO" in *"statically linked"*) re_row Linking "static" ;; *) re_row Linking "dynamic" ;; esac
 
     re_section "Libraries"
-    sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' <<<"$ALL" | list_lines
+    sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' "$ELF" | list_lines
     # Imports: undefined symbols, minus their @version suffix
-    IMPORTS=$(awk '$7 == "UND" && $8 != "" { sub(/@.*/, "", $8); print $8 }' <<<"$ALL")
+    IMPORTS=$(awk '$7 == "UND" && $8 != "" { sub(/@.*/, "", $8); print $8 }' "$ELF")
     re_section "Notable imports"
     grep -xE "$IMPORTS_UNIX" <<<"$IMPORTS" | list_lines
 }
@@ -199,19 +221,50 @@ case "$KIND" in
 esac
 
 # --- Strings -----------------------------------------------------------------
-STR=$(strings -a -n "$MINLEN" "$FILE" 2>/dev/null)
-re_section "Strings (at least $MINLEN characters)"
-re_row Count "$(grep -c . <<<"$STR")"
+STR="$WORK/strings"
+if [ -n "$STRINGX" ]; then
+    stringx -q -e all -l "$MINLEN:" "$FILE" >"$STR" 2>/dev/null
+    re_section "Strings (at least $MINLEN characters, ASCII and UTF-16, read by stringx)"
+else
+    strings -a -n "$MINLEN" "$FILE" >"$STR" 2>/dev/null
+    re_section "Strings (at least $MINLEN characters, ASCII only: install stringx for UTF-16 and decoding)"
+fi
+re_row Count "$(grep -c . "$STR")"
 echo " URLs"
-grep -Eo "https?://[A-Za-z0-9._~:/?#@!\$&()*+,;=%-]+" <<<"$STR" | list_lines
+grep -Eo "https?://[A-Za-z0-9._~:/?#@!\$&()*+,;=%-]+" "$STR" | list_lines
 echo " IP addresses"
-grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' <<<"$STR" | awk -F. '$1 <= 255 && $2 <= 255 && $3 <= 255 && $4 <= 255' | list_lines
+grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' "$STR" | awk -F. '$1 <= 255 && $2 <= 255 && $3 <= 255 && $4 <= 255' | list_lines
 echo " E-mail addresses"
-grep -Eo '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' <<<"$STR" | list_lines
+grep -Eo '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "$STR" | list_lines
 echo " Paths and registry keys"
-grep -Eo '(/etc|/bin|/usr|/tmp|/var|/proc|/dev|/sys)/[A-Za-z0-9._/-]+|HKEY_[A-Z_]+\\[^ ]*' <<<"$STR" | list_lines
+grep -Eo '(/etc|/bin|/usr|/tmp|/var|/proc|/dev|/sys)/[A-Za-z0-9._/-]+|HKEY_[A-Z_]+\\[^ ]*' "$STR" | list_lines
 echo " Keys and credentials"
 {
-    grep -E -- '-----BEGIN [A-Z ]*(PRIVATE KEY|CERTIFICATE)-----|AKIA[0-9A-Z]{16}' <<<"$STR"
-    grep -Ei 'passw(or)?d|secret|token|api[_-]?key|credential' <<<"$STR"
+    # stringx's secret patterns (AWS, GitHub, Slack and Google keys, JWTs,
+    # private keys) over the strings already read, else the basic ones
+    if [ -n "$STRINGX" ]; then
+        stringx -q -f secrets -l 1: "$STR" 2>/dev/null
+    else
+        grep -E -- '-----BEGIN [A-Z ]*(PRIVATE KEY|CERTIFICATE)-----|AKIA[0-9A-Z]{16}' "$STR"
+    fi
+    grep -Ei "$RE_SECRET_WORDS" "$STR"
 } | list_lines
+
+# --- Decoded -----------------------------------------------------------------
+# What stringx finds after decoding, shown as "base64@OFFSET > gzip: string"
+# (the decoding chain, then the result); plain hits are left to the lists above
+re_section "Decoded strings"
+if [ -z "$STRINGX" ]; then
+    echo "  skipped (needs stringx)"
+elif [ "$SIZE" -gt $((32 * 1024 * 1024)) ] && [ -z "$DECODE$XOR" ]; then
+    echo "  skipped on a file over 32 MiB (run with --decode)"
+else
+    re_stringx -d "base64,hex,gzip,zlib${XOR:+,xor}" -f url,ip,ipv6,email,secrets -l "$MINLEN:" "$FILE" \
+        | awk -v f="$FILE->" '
+            index($0, f) == 1 {
+                s = substr($0, length(f) + 1); i = index(s, ": ")
+                chain = substr(s, 1, i - 1); gsub(/->/, " > ", chain)
+                print chain ": " substr(s, i + 2)
+            }' | list_lines
+    [ -n "$XOR" ] || echo "  (single-byte XOR not tried: add --xor)"
+fi

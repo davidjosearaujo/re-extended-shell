@@ -14,7 +14,8 @@ setup() {
 HAVE_SQLITE=""; command -v sqlite3 >/dev/null 2>&1 && HAVE_SQLITE=1
 
 setup
-[ -z "$HAVE_SQLITE" ] || sqlite3 "$STAGE/data/databases/app.db" "CREATE TABLE users(name TEXT); INSERT INTO users VALUES('alice');"
+[ -z "$HAVE_SQLITE" ] || sqlite3 "$STAGE/data/databases/app.db" "CREATE TABLE users(name TEXT); INSERT INTO users VALUES('alice');
+    CREATE TABLE tokens(t TEXT); INSERT INTO tokens VALUES('ghp_abcdefghijklmnopqrstuvwxyz0123456789');"
 cd "$T_DIR" || exit 1
 run app-data $P
 expect_rc 0 "pulls the data"
@@ -25,6 +26,13 @@ expect_out "data/shared_prefs/prefs.xml" "lists the preferences"
 expect_out "auth_token" "flags token-like lines"
 if [ -n "$HAVE_SQLITE" ]; then expect_out "data/databases/app.db" "lists the databases"; else skip "lists the databases" "no sqlite3"; fi
 expect_log "rm -rf /data/local/tmp/re-ext/app-data" "cleans the staging folder up"
+if [ -n "$HAVE_SQLITE" ] && command -v stringx >/dev/null 2>&1; then
+    SECRETS=$(sed -n '/Possible secrets/,/^$/p' <<<"$OUT")
+    grep -q '^  data/databases/app.db: .*ghp_abcdefghijklmnopqrstuvwxyz0123456789' <<<"$SECRETS" \
+        && pass "with stringx: finds a token inside a database" || fail "with stringx: finds a token inside a database" "$SECRETS"
+else
+    skip "finds a token inside a database" "needs sqlite3 and stringx"
+fi
 expect_out "Saved to $T_DIR/$P-data/" "says where it went"
 
 run app-data $P
