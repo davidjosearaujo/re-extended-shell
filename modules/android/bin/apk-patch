@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Patch an APK so its traffic can be intercepted on an unrooted device (trusts the ZAP CA).
+# Patch an APK so its traffic can be intercepted on an unrooted device (trusts your proxy's CA).
 # shellcheck source=../lib.sh
 _re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
 while [ -L "$_re_self" ]; do
@@ -14,7 +14,7 @@ Usage: apk-patch [-o FILE] [-f] [--no-debuggable] [-k KEYSTORE [-p PASSWORD] [-a
 
 Makes an app interceptable on a device without root:
   - replaces its network security config with one that trusts user-installed
-    CAs and the ZAP CA (embedded in the APK, if RE_ZAP_CERT exists), overriding
+    CAs and your proxy's CA (embedded in the APK, if RE_PROXY_CERT exists), overriding
     any <pin-set>, and allows cleartext HTTP
   - sets android:debuggable="true" (unless --no-debuggable)
   - rebuilds it with apktool, zipaligns it and signs it (debug keystore unless -k)
@@ -73,16 +73,16 @@ apktool d -s -f -o "$SRC" "$APK" || re_die "apktool could not decode $APK."
 MANIFEST="$SRC/AndroidManifest.xml"
 [ -f "$MANIFEST" ] || re_die "no AndroidManifest.xml in the decoded APK."
 
-# The ZAP CA, embedded so the app trusts it without installing it on the device
-ZAP_ANCHOR=""
-if [ -f "$RE_ZAP_CERT" ]; then
+# The proxy's CA, embedded so the app trusts it without installing it on the device
+CA_ANCHOR=""
+if [ -f "$RE_PROXY_CERT" ]; then
     mkdir -p "$SRC/res/raw"
     re_prepare_cert "$WORK_DIR"
-    cp "$RE_CERT_FILE" "$SRC/res/raw/re_zap_ca.pem"
-    ZAP_ANCHOR='            <certificates src="@raw/re_zap_ca" overridePins="true" />'
-    echo "Embedding the ZAP CA ($RE_ZAP_CERT)."
+    cp "$RE_CERT_FILE" "$SRC/res/raw/re_proxy_ca.pem"
+    CA_ANCHOR='            <certificates src="@raw/re_proxy_ca" overridePins="true" />'
+    echo "Embedding the proxy CA ($RE_PROXY_CERT)."
 else
-    re_warn "no ZAP CA at $RE_ZAP_CERT, the app will trust user-installed CAs only."
+    re_warn "no proxy CA at $RE_PROXY_CERT, the app will trust user-installed CAs only."
 fi
 
 mkdir -p "$SRC/res/xml"
@@ -94,7 +94,7 @@ mkdir -p "$SRC/res/xml"
     echo '        <trust-anchors>'
     echo '            <certificates src="system" />'
     echo '            <certificates src="user" overridePins="true" />'
-    [ -n "$ZAP_ANCHOR" ] && echo "$ZAP_ANCHOR"
+    [ -n "$CA_ANCHOR" ] && echo "$CA_ANCHOR"
     echo '        </trust-anchors>'
     echo '    </base-config>'
     echo '</network-security-config>'

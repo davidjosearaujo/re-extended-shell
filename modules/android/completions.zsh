@@ -31,11 +31,15 @@ _re_packages() {
 _re_launch_emulator() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
-        '(--clean -d --device -s --serial)--clean[wiped boot, rebuilding the snapshot]' \
-        '(--no-frida)--start-frida-server[also start frida-server]' \
-        '(--start-frida-server)--no-frida[do not push frida-server]' \
-        '(--clean 1)'{-d,--device}'[use a connected physical device]' \
-        '(--clean -s --serial 1)'{-s,--serial}'[physical device to use (implies -d)]:device serial:_re_serials --physical' \
+        '(-d --device -s --serial)--snapshot[boot from the snapshot, saving it first if needed]' \
+        '(-d --device -s --serial --read-only)--clean[wiped boot that replaces the snapshot]' \
+        '(-d --device -s --serial --clean)--read-only[keep nothing from this session]' \
+        '--push-frida-server[push frida-server without starting it]' \
+        '--start-frida-server[push frida-server and start it]' \
+        '--proxy[proxy the traffic to this port on this machine (needs --ca)]:port' \
+        '--ca[inject this CA as a system CA (needs --proxy)]:certificate:_files' \
+        '(--snapshot --clean --read-only 1)'{-d,--device}'[use a connected physical device]' \
+        '(--snapshot --clean --read-only -s --serial 1)'{-s,--serial}'[physical device to use (implies -d)]:device serial:_re_serials --physical' \
         '1:AVD name:_re_avds'
 }
 

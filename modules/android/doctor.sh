@@ -122,16 +122,16 @@ for INI in "$AVD_HOME"/*.ini; do
     # system-images/android-34/google_apis/x86_64/ -> android-34 google_apis
     IMAGE=$(echo "$SYSDIR" | awk -F/ '{ print $2, $3 }')
     DESC="${IMAGE:-unknown image}${ABI:+ $ABI}"
-    if [ -d "$DIR/snapshots/$RE_ZAP_SNAPSHOT" ]; then
-        DESC="$DESC, '$RE_ZAP_SNAPSHOT' snapshot saved"
+    if [ -d "$DIR/snapshots/$RE_EMULATOR_SNAPSHOT" ]; then
+        DESC="$DESC, '$RE_EMULATOR_SNAPSHOT' snapshot saved"
     else
-        DESC="$DESC, no '$RE_ZAP_SNAPSHOT' snapshot yet"
+        DESC="$DESC, no '$RE_EMULATOR_SNAPSHOT' snapshot yet"
     fi
     case "$SYSDIR" in
         *playstore*) PLAYSTORE=true ;;
     esac
     if [ "$PLAYSTORE" = true ] || [ "$PLAYSTORE" = yes ]; then
-        doc_warn "$NAME: $DESC" "Google Play image: no 'adb root', so launch-emulator can't inject the CA. Use a Google APIs image."
+        doc_warn "$NAME: $DESC" "Google Play image: no 'adb root', so no --ca, frida-server or app-data on it. Use a Google APIs image for those."
     elif [ "$RE_OS" = Darwin ] && [ "$HOST_ARCH" = arm64 ] && case "$ABI" in x86*) true ;; *) false ;; esac; then
         doc_warn "$NAME: $DESC" "x86 images don't boot on Apple Silicon, use an arm64-v8a image."
     else

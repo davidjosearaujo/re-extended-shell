@@ -15,8 +15,9 @@ Usage: reset-emulator [-s SERIAL | -n AVD_NAME] [--snapshot NAME]
 
 Loads a snapshot into a running emulator (adb emu avd snapshot load) and waits
 until it's usable again. Everything since the snapshot is dropped: installed
-apps, app data, the proxy setting. The CA and frida-server are back as they
-were when the snapshot was saved.
+apps, app data, the proxy setting, and a CA injected after the snapshot was
+saved (launch-emulator --ca injects it after saving, so pass it again).
+frida-server is back as it was when the snapshot was saved.
 With --save, saves the emulator's current state as the snapshot instead: set up
 the app under test once, then come back to that state with every reset.
 
@@ -25,14 +26,14 @@ Options:
                        emulator)
   -n, --name AVD_NAME  Emulator to use, by AVD name
   --save               Save the current state as the snapshot, replacing it
-  --snapshot NAME      Snapshot to use (default: '$RE_ZAP_SNAPSHOT', the one
-                       launch-emulator boots from, so --save without --snapshot
+  --snapshot NAME      Snapshot to use (default: '$RE_EMULATOR_SNAPSHOT', the one
+                       'launch-emulator --snapshot' boots from, so --save without --snapshot
                        changes where future launches start)
   -h, --help           Show this help
 EOF
 }
 
-TARGET="" FIELD="" SNAP="$RE_ZAP_SNAPSHOT" SAVE=""
+TARGET="" FIELD="" SNAP="$RE_EMULATOR_SNAPSHOT" SAVE=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -h|--help) re_help; exit 0 ;;
@@ -85,8 +86,8 @@ fi
 # then the emulator's own reply below decides)
 if AVD_DIR=$(re_avd_dir "$NAME") && [ ! -d "$AVD_DIR/snapshots/$SNAP" ]; then
     echo "Error: $NAME has no '$SNAP' snapshot to reset to." >&2
-    if [ "$SNAP" = "$RE_ZAP_SNAPSHOT" ]; then
-        echo "Restart it so one gets saved:  kill-emulator $NAME  &&  launch-emulator $NAME" >&2
+    if [ "$SNAP" = "$RE_EMULATOR_SNAPSHOT" ]; then
+        echo "Restart it so one gets saved:  kill-emulator $NAME  &&  launch-emulator --snapshot $NAME" >&2
     else
         echo "Save it first with:  reset-emulator -s $SERIAL --save --snapshot $SNAP" >&2
     fi

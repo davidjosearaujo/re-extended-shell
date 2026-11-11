@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# re-doctor checks of the core module: the shell hook, PATH, and ZAP.
+# re-doctor checks of the core module: the shell hook, PATH, and the intercepting proxy.
 # Sourced by core/bin/re-doctor, which provides the doc_* helpers.
 # shellcheck disable=SC2154  # _re_shell_home comes from bin/re-doctor
 
@@ -57,36 +57,32 @@ else
     doc_info "No java found (JAVA_HOME unset, none on PATH): only the commands that run Java need it"
 fi
 
-doc_section "ZAP"
-if [ ! -f "$RE_ZAP_CERT" ]; then
-    doc_fail "No ZAP root CA at $(re_tilde "$RE_ZAP_CERT")" \
-        "Export it (ZAP: Tools > Options > Network > Server Certificates > Save) or set RE_ZAP_CERT."
+doc_section "Intercepting proxy"
+if [ ! -f "$RE_PROXY_CERT" ]; then
+    doc_info "No proxy CA at $(re_tilde "$RE_PROXY_CERT"): only frida-server --ssl-unpinning and apk-patch use it" \
+        "Export your proxy's root CA (ZAP, Burp, mitmproxy, ...) there, or set RE_PROXY_CERT."
 elif ! command -v openssl >/dev/null 2>&1; then
-    doc_fail "openssl not found, needed to read and convert the ZAP CA"
+    doc_fail "openssl not found, needed to read and convert the proxy CA"
 else
-    FORM=""
-    for F in PEM DER; do
-        if openssl x509 -inform "$F" -in "$RE_ZAP_CERT" -noout >/dev/null 2>&1; then FORM=$F; break; fi
-    done
-    if [ -z "$FORM" ]; then
-        doc_fail "$(re_tilde "$RE_ZAP_CERT") is not a PEM or DER X.509 certificate"
+    if ! FORM=$(re_cert_form "$RE_PROXY_CERT"); then
+        doc_fail "$(re_tilde "$RE_PROXY_CERT") is not a PEM or DER X.509 certificate"
     else
-        NAME=$(openssl x509 -inform "$FORM" -in "$RE_ZAP_CERT" -noout -subject 2>/dev/null \
+        NAME=$(openssl x509 -inform "$FORM" -in "$RE_PROXY_CERT" -noout -subject 2>/dev/null \
             | sed -n 's/.*CN *= *\([^,/]*\).*/\1/p')
         [ -n "$NAME" ] && NAME="'$NAME' "
-        END=$(openssl x509 -inform "$FORM" -in "$RE_ZAP_CERT" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')
-        if ! openssl x509 -inform "$FORM" -in "$RE_ZAP_CERT" -noout -checkend 0 >/dev/null 2>&1; then
-            doc_fail "ZAP CA expired on $END" "Generate a new one in ZAP (Server Certificates > Generate), then export it again."
-        elif ! openssl x509 -inform "$FORM" -in "$RE_ZAP_CERT" -noout -checkend 2592000 >/dev/null 2>&1; then
-            doc_warn "ZAP CA ${NAME}expires soon: $END"
+        END=$(openssl x509 -inform "$FORM" -in "$RE_PROXY_CERT" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')
+        if ! openssl x509 -inform "$FORM" -in "$RE_PROXY_CERT" -noout -checkend 0 >/dev/null 2>&1; then
+            doc_fail "Proxy CA expired on $END" "Have your proxy generate a new CA, then export it again."
+        elif ! openssl x509 -inform "$FORM" -in "$RE_PROXY_CERT" -noout -checkend 2592000 >/dev/null 2>&1; then
+            doc_warn "Proxy CA ${NAME}expires soon: $END"
         else
-            doc_ok "ZAP CA ${NAME}($FORM, valid until $END)"
+            doc_ok "Proxy CA ${NAME}($FORM, valid until $END)"
         fi
     fi
 fi
-if re_port_listening "$RE_ZAP_PORT"; then
-    doc_ok "Something listens on port $RE_ZAP_PORT (RE_ZAP_PORT)"
+if re_port_listening "$RE_PROXY_PORT"; then
+    doc_ok "Something listens on port $RE_PROXY_PORT (RE_PROXY_PORT)"
 else
-    doc_warn "Nothing listens on port $RE_ZAP_PORT" "Start ZAP with its proxy on 127.0.0.1:$RE_ZAP_PORT, or set RE_ZAP_PORT in local/env.sh."
+    doc_info "Nothing listens on port $RE_PROXY_PORT (RE_PROXY_PORT): only needed while device-proxy or frida-server --ssl-unpinning send traffic there"
 fi
 doc_tool optional curl "the commands that download tools (xapk-merger, frida-server)" || true

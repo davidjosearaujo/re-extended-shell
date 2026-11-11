@@ -21,4 +21,4 @@ if [ "$RE_OS" = Darwin ]; then
     doc_tool optional otool "bin-triage on Mach-O files" "xcode-select --install" || true
 fi
 doc_tool optional nm "bin-triage (imports of Mach-O files)" "Install binutils." || true
-doc_tool optional python3 "bin-triage (entropy)" || true
+doc_tool optional python3 "bin-triage (entropy), proto-extract" || true

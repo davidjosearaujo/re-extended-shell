@@ -70,12 +70,11 @@ for TEMPLATE in "$REPO"/local.example/*.sh; do
 done
 
 mkdir -p "$REPO/certs"
-if [ ! -f "$REPO/certs/zap_root_ca.cer" ]; then
+if [ ! -f "$REPO/certs/proxy_ca.cer" ] && [ ! -f "$REPO/certs/zap_root_ca.cer" ]; then
     echo
-    echo "Next: export ZAP's root CA so launch-emulator can inject it:"
-    echo "  ZAP > Tools > Options > Network > Server Certificates > Save"
-    echo "  (or: zap.sh -cmd -certpubdump $REPO/certs/zap_root_ca.cer)"
-    echo "  and save it as $REPO/certs/zap_root_ca.cer"
+    echo "Optional: for frida-server --ssl-unpinning and apk-patch, export your intercepting"
+    echo "proxy's root CA (ZAP, Burp, mitmproxy, ...; PEM or DER) to $REPO/certs/proxy_ca.cer,"
+    echo "or point RE_PROXY_CERT at it in local/env.sh."
 fi
 
 echo

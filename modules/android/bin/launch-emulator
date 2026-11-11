@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Boot an emulator (or set up a rooted phone) with ZAP's CA injected and its traffic proxied through ZAP.
+# Start an emulator (or set up a phone) as it is; on request, root it, push Frida, inject a CA and proxy its traffic.
 # shellcheck source=../lib.sh
 _re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
 while [ -L "$_re_self" ]; do
@@ -10,37 +10,63 @@ done
 
 usage() {
     cat <<EOF
-Usage: launch-emulator [--clean] [--start-frida-server | --no-frida] <AVD_NAME>
-       launch-emulator -d [-s SERIAL] [--start-frida-server | --no-frida]
+Usage: launch-emulator [options] <AVD_NAME>
+       launch-emulator --snapshot [NAME] [options] <AVD_NAME>
+       launch-emulator -d [-s SERIAL] [options]
 
-Boots the AVD from its '$RE_ZAP_SNAPSHOT' snapshot, or, when there is none yet,
-does a wiped boot, sets up ZAP and saves the snapshot. Setting up ZAP means:
-ZAP's root CA injected as a system CA, the global HTTP proxy pointed at ZAP,
-and frida-server pushed (if Frida is installed here).
-With -d, does the same on a rooted physical device (userdebug build, or su via
-Magisk/KernelSU), proxying through 'adb reverse' and mirroring its screen with
-scrcpy. Run release-device before unplugging it.
-ZAP must listen on 127.0.0.1:$RE_ZAP_PORT, with its root CA exported to
-$RE_ZAP_CERT.
+Starts the AVD as it is: no wipe, and its state isn't saved on exit. If it's
+already running, uses that emulator. Everything else is asked for with flags.
 
 Options:
+  --snapshot [NAME]     Boot from snapshot NAME instead (default:
+                        '$RE_EMULATOR_SNAPSHOT'). When the AVD has no such snapshot yet,
+                        boot it as it is, set it up, then save it under that name
+  --clean               Wiped boot (erases the AVD's user data) that then saves
+                        the snapshot, replacing it (implies --snapshot)
+  --read-only           Keep nothing from this session, disk included (also
+                        lets a second emulator run the same AVD)
+  --push-frida-server   Push the frida-server build that matches 'frida
+                        --version', without starting it
+  --start-frida-server  Push frida-server and start it
+  --proxy PORT          Proxy the device's traffic to PORT on this machine
+                        (ZAP, Burp, mitmproxy, ...); needs --ca
+  --ca FILE             Inject FILE (your proxy's root CA, PEM or DER) as a
+                        system CA; needs --proxy
   -d, --device          Use a connected physical device instead of an emulator
+                        (rooted, for --ca and frida-server), mirrored with scrcpy
   -s, --serial SERIAL   Physical device to use (implies -d; optional with a
                         single device)
-  --clean               Wiped boot that ignores the snapshot, then replaces it
-  --start-frida-server  Also start frida-server (by default it's only pushed;
-                        'frida-server' starts it later)
-  --no-frida            Don't push frida-server
   -h, --help            Show this help
+
+Root ('adb root', or su on a phone) is only taken when a flag needs it.
+frida-server is pushed before a snapshot is saved, so the snapshot has it; the
+CA and proxy come after, so a snapshot never has them. Run release-device
+before unplugging a phone with a proxy set.
+
+Examples:
+  launch-emulator Pixel_8_API_34
+  launch-emulator --snapshot --push-frida-server Pixel_8_API_34
+  launch-emulator --snapshot banking-app Pixel_8_API_34
+  launch-emulator --proxy 8080 --ca ~/burp-ca.der Pixel_8_API_34
+  launch-emulator -d --start-frida-server
 EOF
 }
 
-CLEAN="" DEVICE="" SERIAL="" AVD_NAME="" NO_FRIDA="" START_FRIDA=""
+SNAPSHOT="" SNAP="$RE_EMULATOR_SNAPSHOT" SNAP_ARG="" CLEAN="" READ_ONLY="" DEVICE="" SERIAL="" AVD_NAME="" PUSH_FRIDA="" START_FRIDA="" PROXY_PORT="" CA=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --clean) CLEAN=1; shift ;;
-        --no-frida) NO_FRIDA=1; shift ;;
-        --start-frida-server) START_FRIDA=1; shift ;;
+        # The name is optional: a word after --snapshot is taken as the name
+        # for now, and given back as the AVD if no other AVD name follows
+        --snapshot)
+            SNAPSHOT=1; shift
+            case "${1:-}" in -*|'') ;; *) SNAP_ARG="$1"; shift ;; esac ;;
+        --snapshot=*) SNAPSHOT=1; SNAP="${1#*=}"; [ -n "$SNAP" ] || re_die "--snapshot= needs a name."; shift ;;
+        --clean) CLEAN=1; SNAPSHOT=1; shift ;;
+        --read-only) READ_ONLY=1; shift ;;
+        --push-frida-server) PUSH_FRIDA=1; shift ;;
+        --start-frida-server) START_FRIDA=1; PUSH_FRIDA=1; shift ;;
+        --proxy) re_need_arg "$1" "$#"; PROXY_PORT="$2"; shift 2 ;;
+        --ca) re_need_arg "$1" "$#"; CA="$2"; shift 2 ;;
         -d|--device) DEVICE=1; shift ;;
         -s|--serial) re_need_arg "$1" "$#"; DEVICE=1; SERIAL="$2"; shift 2 ;;
         -h|--help) re_help; exit 0 ;;
@@ -50,27 +76,42 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-if [ -n "$NO_FRIDA" ] && [ -n "$START_FRIDA" ]; then
-    re_die "--no-frida and --start-frida-server don't go together."
+if [ -n "$SNAP_ARG" ]; then
+    if [ -n "$AVD_NAME" ] || [ -n "$DEVICE" ]; then SNAP="$SNAP_ARG"; else AVD_NAME="$SNAP_ARG"; fi
 fi
-if [ -n "$DEVICE" ] && [ -n "$AVD_NAME" ]; then
-    re_die "pass either an AVD name or -d [-s SERIAL], not both (a device serial goes after -s)."
+case "$SNAP" in */*|.|..) re_die "--snapshot: '$SNAP' isn't a valid snapshot name." ;; esac
+if [ -n "$DEVICE" ]; then
+    [ -z "$AVD_NAME" ] || re_die "pass either an AVD name or -d [-s SERIAL], not both (a device serial goes after -s)."
+    [ -z "$SNAPSHOT$READ_ONLY" ] || re_die "--snapshot, --clean and --read-only are for emulators, not physical devices."
+fi
+[ -z "$READ_ONLY" ] || [ -z "$CLEAN" ] || re_die "--read-only and --clean don't go together: --clean saves a snapshot."
+if [ -n "$PROXY_PORT" ] || [ -n "$CA" ]; then
+    [ -n "$PROXY_PORT" ] && [ -n "$CA" ] || re_die "--proxy and --ca go together: the proxy's CA has to be trusted for it to read HTTPS."
+    case "$PROXY_PORT" in
+        ''|*[!0-9]*) re_die "--proxy needs a port number, not '$PROXY_PORT'." ;;
+    esac
+    [ "$PROXY_PORT" -ge 1 ] && [ "$PROXY_PORT" -le 65535 ] || re_die "--proxy: $PROXY_PORT is not a port (1-65535)."
 fi
 
 re_require adb
+# Fail early, before booting anything
+[ -z "$PUSH_FRIDA" ] || command -v frida >/dev/null 2>&1 \
+    || re_die "Frida isn't installed on this machine (pipx install frida-tools), so there's no frida-server version to match."
+if [ -n "$CA" ]; then
+    WORK_DIR=$(mktemp -d)
+    trap 'rm -rf "$WORK_DIR"' EXIT
+    re_prepare_cert "$WORK_DIR" "$CA"
+    re_warn_proxy_down "$PROXY_PORT"
+fi
 
-# Fail early on a missing certificate, before booting anything
-WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
-re_prepare_cert "$WORK_DIR"
-
-ADB=()
+# MODE: device (physical), running (an emulator already up), asis (boot as it
+# is), snapshot (boot from the snapshot), create (boot as it is, then save the
+# snapshot), clean (wiped boot, then save it). Only --clean ever wipes.
+SAVE=""   # set when a snapshot gets saved (create, clean)
 if [ -n "$DEVICE" ]; then
-    [ -n "$CLEAN" ] && re_warn "--clean has no effect on a physical device, ignoring it."
     SERIAL=$(re_pick_device --physical "launch-emulator -d -s" "$SERIAL") || exit 1
     MODE="device"
-    ADB=(adb -s "$SERIAL")
-    MODEL=$("${ADB[@]}" shell getprop ro.product.model 2>/dev/null | tr -d '\r')
+    MODEL=$(adb -s "$SERIAL" shell getprop ro.product.model 2>/dev/null | tr -d '\r')
     echo "Using physical device: ${MODEL:-unknown model} ($SERIAL), skipping emulator launch."
 else
     re_require emulator
@@ -86,104 +127,127 @@ $(sed 's/^/  /' <<<"$PHYS")}"
 
     AVD_DIR=$(re_avd_dir "$AVD_NAME") || re_die "no AVD named '$AVD_NAME' (see 'emulator -list-avds')."
 
-    # Decide the boot mode
-    # (clean and create both boot wiped and save the snapshot afterwards)
-    if [ -z "$CLEAN" ] && [ -d "$AVD_DIR/snapshots/$RE_ZAP_SNAPSHOT" ]; then
-        MODE="snapshot"
-        BOOT_ARGS=(-snapshot "$RE_ZAP_SNAPSHOT" -no-snapshot-save)
+    # A second emulator on the same AVD only works read-only
+    RUNNING=""
+    [ -n "$READ_ONLY" ] || RUNNING=$(re_emulator_serial "$AVD_NAME")
+    if [ -n "$RUNNING" ]; then
+        [ -z "$SNAPSHOT" ] || re_die "$AVD_NAME is already running as $RUNNING. Stop it first (kill-emulator $AVD_NAME), or go back to the snapshot with: reset-emulator -n $AVD_NAME --snapshot $SNAP"
+        MODE="running"
+        SERIAL="$RUNNING"
+        echo "$AVD_NAME is already running as $SERIAL, using it."
     else
-        MODE="create"
-        [ -z "$CLEAN" ] || MODE="clean"
-        BOOT_ARGS=(-no-snapshot-load -no-snapshot-save -wipe-data)
-    fi
-
-    # Pick a free console/adb port pair so adb can target this emulator explicitly
-    PORT=""
-    for P in $(seq 5554 2 5584); do
-        if ! re_port_listening "$P" && ! re_port_listening "$((P + 1))"; then PORT="$P"; break; fi
-    done
-    [ -n "$PORT" ] || re_die "no free emulator port pair between 5554 and 5585."
-    SERIAL="emulator-$PORT"
-    ADB=(adb -s "$SERIAL")
-    EMU_LOG="${TMPDIR:-/tmp}/emulator-$AVD_NAME.log"
-
-    case "$MODE" in
-        clean)    echo "Starting forensic Android AVD: $AVD_NAME (wiped boot, snapshot ignored and rebuilt)" ;;
-        snapshot) echo "Starting forensic Android AVD: $AVD_NAME (from snapshot '$RE_ZAP_SNAPSHOT')" ;;
-        create)   echo "Starting forensic Android AVD: $AVD_NAME (no '$RE_ZAP_SNAPSHOT' snapshot, wiped boot, will create it)" ;;
-    esac
-    echo "Serial: $SERIAL, log: $EMU_LOG"
-
-    emulator -avd "$AVD_NAME" \
-             -port "$PORT" \
-             "${BOOT_ARGS[@]}" \
-             -netdelay none \
-             -netspeed full </dev/null >"$EMU_LOG" 2>&1 &
-    EMU_PID=$!
-    disown
-
-    echo "Waiting for Android boot to complete..."
-    until re_boot_completed "$SERIAL"; do
-        kill -0 "$EMU_PID" 2>/dev/null || re_die "emulator exited during boot. See $EMU_LOG"
-        sleep 2
-    done
-fi
-
-# Root: 'adb root' works on emulators and userdebug builds; rooted retail
-# phones (Magisk/KernelSU) only offer su, which re_root_mode falls back to.
-if ! ROOT=$(re_root_mode --adb-root "$SERIAL"); then
-    if [ "$MODE" = "device" ]; then
-        re_die "no root on $SERIAL (needs a userdebug build or a working su, e.g. Magisk/KernelSU)."
-    else
-        re_die "could not get a root adb shell (Google Play images don't allow it, use a Google APIs image)."
-    fi
-fi
-
-# Runs in every mode: inject_ca.sh skips the injection if it's already in place
-# (restored snapshot, or a device that hasn't rebooted since the last run)
-echo "Pushing certificate ($RE_CERT_HASH.0) and CA injection script..."
-"${ADB[@]}" shell mkdir -p "$RE_DEVICE_DIR" || exit 1
-"${ADB[@]}" push "$RE_CERT_FILE" "$RE_ANDROID_DIR/device/inject_ca.sh" "$RE_DEVICE_DIR/" >/dev/null || exit 1
-"${ADB[@]}" shell chmod 755 "$RE_DEVICE_DIR/inject_ca.sh"
-
-echo "Executing CA injection script..."
-re_root_shell "$SERIAL" "$ROOT" "$RE_DEVICE_DIR/inject_ca.sh $RE_DEVICE_DIR/$RE_CERT_HASH.0" \
-    || re_die "the CA injection failed."
-
-# A physical device gets the port tunnelled back to ZAP over adb reverse
-[ "$MODE" != "device" ] || echo "Forwarding device port $RE_ZAP_PORT to this machine's ZAP (adb reverse)..."
-PROXY=$(re_zap_proxy "$SERIAL") || re_die "could not forward port $RE_ZAP_PORT to ZAP (adb reverse)."
-echo "Setting global HTTP proxy to $PROXY..."
-"${ADB[@]}" shell settings put global http_proxy "$PROXY"
-
-# By default only puts the binary on the device (start it with frida-server, or
-# pass --start-frida-server). Runs before the snapshot is saved, so the binary
-# ends up in it, but a started server doesn't: when asked to, it starts after.
-# Best effort: the proxy and CA are already in place, so a failure only warns.
-FRIDA_SERVER="$RE_ANDROID_DIR/bin/frida-server"
-FRIDA_OK=""
-if [ -z "$NO_FRIDA" ]; then
-    if command -v frida >/dev/null 2>&1; then
-        if "$FRIDA_SERVER" -s "$SERIAL" --push-only; then
-            FRIDA_OK=1
+        if [ -z "$SNAPSHOT" ]; then
+            MODE="asis"
+            BOOT_ARGS=(-no-snapshot-save)
+        elif [ -z "$CLEAN" ] && [ -d "$AVD_DIR/snapshots/$SNAP" ]; then
+            MODE="snapshot"
+            BOOT_ARGS=(-snapshot "$SNAP" -no-snapshot-save)
         else
-            re_warn "could not push frida-server, see above. Retry with: frida-server -s $SERIAL"
+            [ -z "$READ_ONLY" ] || re_die "$AVD_NAME has no '$SNAP' snapshot yet, and --read-only can't save one. Run once without --read-only."
+            SAVE=1
+            if [ -n "$CLEAN" ]; then
+                MODE="clean"
+                BOOT_ARGS=(-no-snapshot-load -no-snapshot-save -wipe-data)
+            else
+                MODE="create"
+                BOOT_ARGS=(-no-snapshot-save)
+            fi
         fi
+        [ -z "$READ_ONLY" ] || BOOT_ARGS+=(-read-only)
+        # Older versions saved 'zap-ready', with ZAP's CA and proxy in it
+        if [ -n "$SNAPSHOT" ] && [ "$SNAP" != zap-ready ] && [ -d "$AVD_DIR/snapshots/zap-ready" ]; then
+            echo "Note: the old 'zap-ready' snapshot (ZAP's CA and proxy baked in) isn't used any more."
+            echo "      Delete it with: rm -rf \"$AVD_DIR/snapshots/zap-ready\""
+        fi
+
+        # Pick a free console/adb port pair so adb can target this emulator explicitly
+        PORT=""
+        for P in $(seq 5554 2 5584); do
+            if ! re_port_listening "$P" && ! re_port_listening "$((P + 1))"; then PORT="$P"; break; fi
+        done
+        [ -n "$PORT" ] || re_die "no free emulator port pair between 5554 and 5585."
+        SERIAL="emulator-$PORT"
+        EMU_LOG="${TMPDIR:-/tmp}/emulator-$AVD_NAME.log"
+
+        case "$MODE" in
+            asis)     echo "Starting AVD: $AVD_NAME (as it is${READ_ONLY:+, read-only})" ;;
+            snapshot) echo "Starting AVD: $AVD_NAME (from snapshot '$SNAP'${READ_ONLY:+, read-only})" ;;
+            clean)    echo "Starting AVD: $AVD_NAME (wiped boot, snapshot '$SNAP' rebuilt after)" ;;
+            create)   echo "Starting AVD: $AVD_NAME (no '$SNAP' snapshot yet: as it is, will save it)" ;;
+        esac
+        echo "Serial: $SERIAL, log: $EMU_LOG"
+
+        emulator -avd "$AVD_NAME" \
+                 -port "$PORT" \
+                 "${BOOT_ARGS[@]}" \
+                 -netdelay none \
+                 -netspeed full </dev/null >"$EMU_LOG" 2>&1 &
+        EMU_PID=$!
+        disown
+
+        echo "Waiting for Android boot to complete..."
+        until re_boot_completed "$SERIAL"; do
+            kill -0 "$EMU_PID" 2>/dev/null || re_die "emulator exited during boot. See $EMU_LOG"
+            sleep 2
+        done
+    fi
+fi
+ADB=(adb -s "$SERIAL")
+
+# Root only for the CA ('adb root', else su); frida-server gets its own
+ROOT=""
+[ -z "$CA" ] || ROOT=$(re_require_root "$SERIAL") || exit 1
+
+# A device launched earlier with --proxy may still proxy to this machine: say
+# so, as it can clash with other interception tools
+if [ -z "$PROXY_PORT" ] && OLD_PROXY=$(re_device_proxy "$SERIAL") && [ -n "$OLD_PROXY" ]; then
+    re_warn "$SERIAL still has a global HTTP proxy ($OLD_PROXY). Clear it with: device-proxy -s $SERIAL off"
+fi
+
+# Pushed before a snapshot is saved, so the binary ends up in it, but a
+# started server doesn't: then --start-frida-server starts it after. Without a
+# snapshot, one call pushes and starts it. Best effort: a failure only warns.
+FRIDA_SERVER="$RE_ANDROID_DIR/bin/frida-server"
+if [ -n "$START_FRIDA" ] && [ -z "$SAVE" ]; then
+    "$FRIDA_SERVER" -s "$SERIAL" || re_warn "frida-server did not start, see above. Retry with: frida-server -s $SERIAL"
+    START_FRIDA=""
+elif [ -n "$PUSH_FRIDA" ] && ! "$FRIDA_SERVER" -s "$SERIAL" --push-only; then
+    re_warn "could not push frida-server, see above. Retry with: frida-server -s $SERIAL"
+    START_FRIDA=""
+fi
+
+if [ -n "$SAVE" ]; then
+    echo "Saving snapshot '$SNAP'..."
+    if re_emu_snapshot "$SERIAL" save "$SNAP"; then
+        NAMED=" $SNAP"
+        [ "$SNAP" != "$RE_EMULATOR_SNAPSHOT" ] || NAMED=""
+        echo "Snapshot '$SNAP' saved. 'launch-emulator --snapshot$NAMED $AVD_NAME' will boot from it."
     else
-        echo "Frida not found on this machine, not pushing frida-server (pip install frida-tools, or pass --no-frida to silence this)."
+        re_warn "failed to save snapshot '$SNAP'."
     fi
 fi
 
-if [ "$MODE" = "create" ] || [ "$MODE" = "clean" ]; then
-    echo "Saving snapshot '$RE_ZAP_SNAPSHOT'..."
-    if re_emu_snapshot "$SERIAL" save "$RE_ZAP_SNAPSHOT"; then
-        echo "Snapshot '$RE_ZAP_SNAPSHOT' saved. Next launches will boot from it."
-    else
-        re_warn "failed to save snapshot '$RE_ZAP_SNAPSHOT'."
-    fi
+# The CA and proxy come after the snapshot, so it never has them.
+# inject_ca.sh skips the injection if it's already in place (a device that
+# hasn't rebooted since the last run).
+PROXY=""
+if [ -n "$CA" ]; then
+    echo "Pushing certificate ($RE_CERT_HASH.0) and CA injection script..."
+    "${ADB[@]}" shell mkdir -p "$RE_DEVICE_DIR" || exit 1
+    "${ADB[@]}" push "$RE_CERT_FILE" "$RE_ANDROID_DIR/device/inject_ca.sh" "$RE_DEVICE_DIR/" >/dev/null || exit 1
+
+    echo "Executing CA injection script..."
+    re_root_shell "$SERIAL" "$ROOT" "sh $RE_DEVICE_DIR/inject_ca.sh $RE_DEVICE_DIR/$RE_CERT_HASH.0" \
+        || re_die "the CA injection failed."
+
+    # A physical device gets the port tunnelled back over adb reverse
+    [ "$MODE" != "device" ] || echo "Forwarding device port $PROXY_PORT to this machine (adb reverse)..."
+    PROXY=$(re_proxy_address "$SERIAL" "$PROXY_PORT") || re_die "could not forward port $PROXY_PORT (adb reverse)."
+    echo "Setting global HTTP proxy to $PROXY..."
+    "${ADB[@]}" shell settings put global http_proxy "$PROXY"
 fi
 
-if [ -n "$START_FRIDA" ] && [ -n "$FRIDA_OK" ]; then
+if [ -n "$START_FRIDA" ]; then
     "$FRIDA_SERVER" -s "$SERIAL" || re_warn "frida-server did not start, see above. Retry with: frida-server -s $SERIAL"
 fi
 
@@ -196,9 +260,18 @@ if [ "$MODE" = "device" ]; then
     else
         re_warn "scrcpy not found, skipping screen mirroring (https://github.com/Genymobile/scrcpy)."
     fi
-    echo "$SERIAL is ready: its traffic goes to ZAP via $PROXY (adb reverse)."
+fi
+
+if [ -z "$PROXY" ]; then
+    echo "$SERIAL is ready."
+elif [ "$MODE" = "device" ]; then
+    echo "$SERIAL is ready: its traffic goes to port $PROXY_PORT on this machine via $PROXY (adb reverse)."
     echo "The CA lasts until the device reboots. The proxy setting persists and breaks the device's"
     echo "network once adb disconnects, so run 'release-device -s $SERIAL' before unplugging it."
 else
-    echo "$SERIAL is ready: its traffic goes to ZAP via $PROXY."
+    echo "$SERIAL is ready: its traffic goes to port $PROXY_PORT on this machine via $PROXY."
+    case "$MODE" in
+        snapshot|create|clean) echo "The snapshot doesn't keep the CA or the proxy: reset-emulator drops them." ;;
+        *) [ -n "$READ_ONLY" ] || echo "The proxy setting can outlive this session: 'device-proxy -s $SERIAL off' clears it." ;;
+    esac
 fi
