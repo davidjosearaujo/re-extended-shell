@@ -1,0 +1,42 @@
+
+syntax = "proto3";
+
+package acme.api.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option java_package = "com.acme.api";
+option go_package = "acme.dev/api/v1";
+
+message Order {
+  string id = 1;
+  repeated Order.Item items = 2;
+  map<string, int64> labels = 3;
+  .google.protobuf.Timestamp created = 4;
+  oneof payment {
+    string card = 5;
+    Voucher voucher = 6;
+  }
+  optional string note = 7;
+  Order.Status status = 8;
+  reserved 9 to 11;
+  reserved "legacy";
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    PAID = 1;
+    NEG = -2;
+  }
+  message Item {
+    string sku = 1;
+    sint32 qty = 2;
+  }
+}
+
+message Voucher {
+  bytes code = 1;
+}
+
+service Orders {
+  rpc Get(Order) returns (Order);
+  rpc Watch(stream Order) returns (stream Order);
+}

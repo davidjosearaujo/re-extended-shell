@@ -1,0 +1,5 @@
+Binary APK
+Package name=com.example.target id=7f
+  type xml id=01 entryCount=1
+    resource 0x7f010000 xml/nsc
+      () (file) res/xml/nsc.xml type=XML

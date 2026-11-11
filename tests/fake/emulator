@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Fake emulator for ./test: registers the device with the fake adb and exits
+# (launch-emulator only checks the process while boot is incomplete, and the
+# fake adb reports it complete at once).
+if [ "${1:-}" = "-list-avds" ]; then
+    for F in "${ANDROID_AVD_HOME:?}"/*.ini; do [ -f "$F" ] && basename -- "$F" .ini; done
+    exit 0
+fi
+AVD="" PORT="" ARGS="$*"
+while [ "$#" -gt 0 ]; do
+    case "$1" in -avd) AVD="$2"; shift ;; -port) PORT="$2"; shift ;; esac
+    shift
+done
+echo "emulator-$PORT|$AVD|device" >>"${FAKE_STATE:?}/devices"
+echo "emulator $ARGS" >>"$FAKE_STATE/log"
