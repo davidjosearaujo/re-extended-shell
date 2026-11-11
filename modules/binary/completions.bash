@@ -7,7 +7,7 @@ _re_complete_bin_triage() {
         -n|--min-length|-l|--limit) COMPREPLY=(); return ;;
     esac
     if [[ "$cur" == -* ]]; then
-        _re_reply_words "-n --min-length -l --limit -h --help"
+        _re_reply_words "-n --min-length -l --limit --decode --xor -h --help"
     else
         _re_reply_files ""
     fi

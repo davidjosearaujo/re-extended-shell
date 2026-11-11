@@ -164,7 +164,7 @@ Settings shared by every module (set them in `local/env.sh`, see [Configuration]
 | `apk-patch <file.apk>` | For phones you can't root: makes the app trust user CAs and the ZAP CA (embedded in the APK), overriding `<pin-set>`s, allows cleartext, sets `debuggable`, then rebuilds and signs it. `-o` sets the output, `-f` replaces an existing one. |
 | `apk-info [-s SERIAL] <file.apk \| PKG>` | A static first look at an app, without decompiling it: the components other apps can reach and the permission guarding each (flagging those anyone can get), the URIs its deep links open, `debuggable`/`allowBackup`/cleartext, its network security config (cleartext, user CAs, pins, debug overrides), the permissions it asks for and declares, its signature (debug certificate, Janus), and its code (dex, native libraries, and whether it's Flutter, React Native, Xamarin, Unity, Cordova or Capacitor). Works on a file or on an installed app, by package name. `--all` lists the components that aren't exported too. |
 | `app-intent [-s SERIAL] <PKG> [COMPONENT]` | Without a component, lists the app's exported components, numbered. With one (number, full name or `.ShortName`), starts it as another app would: `am start` for an activity, `am startservice`, `am broadcast`, or `content query` on a provider. `--action`, `--data URI` and `-e KEY=VALUE` fill the intent, and arguments after `--` go to `am`/`content`. `--data` alone tries a deep link. It runs as the shell user even when adbd is root, so it's refused where another app would be; `--root` reaches the components that aren't exported. |
-| `app-data [-s SERIAL] [--diff DIR] <PKG>` | Copies the app's private storage off a rooted device (`/data/data`, device-encrypted storage, external storage) into `./<PKG>-data/`, then lists its preferences, databases and the lines that look like tokens or passwords. `--diff DIR` compares the copy with an earlier one: preferences and other text files line by line, databases row by row (with `sqlite3`), so you see what an action in the app writes. |
+| `app-data [-s SERIAL] [--diff DIR] <PKG>` | Copies the app's private storage off a rooted device (`/data/data`, device-encrypted storage, external storage) into `./<PKG>-data/`, then lists its preferences, databases and the keys, tokens and password-like lines in them (with `stringx`, keys in databases and binary files too). `--diff DIR` compares the copy with an earlier one: preferences and other text files line by line, databases row by row (with `sqlite3`), so you see what an action in the app writes. |
 | `applog [-s SERIAL] [--start] <PKG>` | `logcat` for that app's process only. Waits for it to start and follows it across restarts. `--start` (re)launches it; arguments after `--` go to logcat. |
 | `launch-emulator-wireshark [-s SERIAL] [-i IFACE]` | Streams `tcpdump` from the device into a local Wireshark window. |
 | `xapk-installer [-s SERIAL \| -n AVD] <file.xapk>` | Installs every split in an XAPK/ZIP bundle with `adb install-multiple` and pushes any OBB data. |
@@ -200,7 +200,8 @@ apk-pull --merge com.example.app && apk-decompile com.example.app.apk
     PATH, point `JADX` (and `JADX_GUI`) at it, arguments included
   - `apk-info`, `app-intent`: `aapt2` from the SDK build-tools (`apk-info` also uses
     `apksigner` for the signature, and `unzip`)
-  - `app-data`: a rooted device or emulator; `sqlite3` (in platform-tools) to diff databases
+  - `app-data`: a rooted device or emulator; `sqlite3` (in platform-tools) to diff databases;
+    `stringx` to find keys in databases and binary files
   - `apk-patch`: apktool **2.9 or newer** (older ones, like many distributions ship,
     can't rebuild most current apps), Java and the SDK build-tools
   - `xapk-merger`, `apk-pull --merge`: Java and the SDK build-tools
@@ -291,11 +292,15 @@ Native executables and libraries on Linux, macOS and Windows, with no device inv
 
 | Command | What it does |
 | --- | --- |
-| `bin-triage <file>` | A first look at an ELF, Mach-O or PE file, in one report: file type, size and hashes (MD5, SHA-1, SHA-256); whole-file entropy, which flags packed or encrypted files; hardening (PIE, NX, RELRO, stack canary, fortify and stripped for ELF; PIE, canary, signed and encrypted for Mach-O; ASLR, DEP and control-flow guard for PE); the libraries it links; the imports that matter (exec, network, memory, anti-debugging); and the URLs, IP addresses, e-mail addresses, paths, keys and password-like strings in its text. `-n` sets the shortest string, `-l` how many lines each list shows. Other files get the generic parts. It only reads the file, it never runs it. |
+| `bin-triage <file>` | A first look at an ELF, Mach-O or PE file, in one report: file type, size and hashes (MD5, SHA-1, SHA-256); whole-file entropy, which flags packed or encrypted files; hardening (PIE, NX, RELRO, stack canary, fortify and stripped for ELF; PIE, canary, signed and encrypted for Mach-O; ASLR, DEP and control-flow guard for PE); the libraries it links; the imports that matter (exec, network, memory, anti-debugging); the URLs, IP addresses, e-mail addresses, paths, keys and password-like strings in its text; and, with `stringx` (see Requirements below), what's hidden in Base64, hex, gzip or zlib data. `-n` sets the shortest string, `-l` how many lines each list shows, `--xor` also tries every single-byte XOR key (slow), and `--decode` decodes files over 32 MiB too. Other files get the generic parts. It only reads the file, it never runs it. |
 
 ### Requirements
 
-- `file` and `strings` (binutils; on macOS the Xcode command line tools).
+- `file`.
+- `stringx` to read the strings: ASCII and UTF-16 (which binutils `strings` misses, and
+  Windows binaries are full of), its secret patterns, and decoding. Without it,
+  `bin-triage` falls back to `strings` (binutils; on macOS the Xcode command line tools),
+  ASCII only and without the decoded section.
 - For the format details: `readelf` for ELF, `objdump` for PE (both from binutils), `otool` and `nm` for Mach-O.
 - `python3` for the entropy figure. Anything missing is skipped and named in the report, and `re-doctor` lists it.
 
@@ -411,6 +416,9 @@ manifests and the footer every command shares.
 - A command that needs root on a device gets it with `ROOT=$(re_require_root "$SERIAL") || exit 1`
   and runs commands with `re_root_shell`. Commands that read an APK's manifest use
   `re_manifest_records`; awk code that reads `aapt2` output starts with `"$RE_AWK_LIB"`.
+- Strings and secrets: `re_stringx` runs `stringx` and prints its hits as `WHERE: STRING`
+  (it fails when `stringx` isn't installed, so fall back to `strings` or `grep`), and
+  `RE_SECRET_WORDS` is the regex for words that name a secret.
 
 ## Notes
 

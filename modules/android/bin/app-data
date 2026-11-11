@@ -14,8 +14,9 @@ Usage: app-data [-s SERIAL] [-o DIR] [-f] [--diff OLD_DIR] <PACKAGE>
 
 Copies an installed app's private storage off a rooted device or emulator, to
 see what it keeps and how: shared preferences, SQLite databases, files and
-caches. Then lists its preferences and databases, and the lines that look like
-tokens or passwords. With --diff, compares the copy with an earlier one and
+caches. Then lists its preferences and databases, and the keys, tokens and
+password-like lines in them (keys in databases and binary files too when
+stringx is installed). With --diff, compares the copy with an earlier one and
 shows what changed, line by line for preferences and other text files and
 row by row for databases (needs sqlite3), so you can see what an action in
 the app writes.
@@ -125,9 +126,16 @@ while IFS= read -r F; do
     case "$F" in */databases/*|*.db|*.db3|*.sqlite|*.sqlite3|*.sqlitedb) ;; *) continue ;; esac
     is_sqlite "$OUTPUT/$F" && echo "$F"
 done <<<"$FILES" | re_list
-echo " Possible secrets (in text files)"
-(cd "$OUTPUT" && grep -rIniE '(pass(word|wd)?|secret|token|api[_-]?key|session|cookie|auth|bearer|private[_-]?key)' . 2>/dev/null) \
-    | sed 's#^\./##' | re_list
+# Keys and tokens anywhere, databases and binary files included (stringx's
+# patterns: AWS, GitHub, Slack and Google keys, JWTs, private keys), then the
+# lines of text files that name a secret
+echo " Possible secrets"
+(
+    cd "$OUTPUT" || exit 0
+    re_stringx -R -f secrets .
+    # The shared words, plus what apps keep: a bare pass, sessions, cookies, auth
+    grep -rIniE "$RE_SECRET_WORDS|pass|session|cookie|auth" . 2>/dev/null | sed 's#^\./##'
+) | re_list
 
 # --- Changes since an earlier copy -------------------------------------------
 # Prints the dump of database FILE (and its -wal) read from a copy, so neither
