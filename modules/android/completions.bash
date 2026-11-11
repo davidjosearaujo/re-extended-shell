@@ -43,9 +43,11 @@ _re_complete_launch_emulator() {
     local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
     case "$prev" in
         -s|--serial) _re_reply_words "$(_re_serials --physical)"; return ;;
+        --proxy) return ;;
+        --ca) _re_reply_files "cer|crt|pem|der"; return ;;
     esac
     if [[ "$cur" == -* ]]; then
-        _re_reply_words "--clean --start-frida-server --no-frida -d --device -s --serial -h --help"
+        _re_reply_words "--snapshot --clean --read-only --push-frida-server --start-frida-server --proxy --ca -d --device -s --serial -h --help"
     else
         _re_reply_words "$(_re_avds)"
     fi

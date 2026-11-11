@@ -8,7 +8,7 @@ mkdir -p "$COPY"
 (cd "$REPO" && tar --exclude=.git --exclude=./local --exclude=./certs -cf - .) | (cd "$COPY" && tar -xf -)
 mkdir -p "$COPY/local"
 cat >"$COPY/local/env.sh" <<'SH'
-export RE_ZAP_PORT=1234
+export RE_PROXY_PORT=1234
 SH
 cat >"$COPY/local/aliases.sh" <<'SH'
 alias ll='ls -l'
@@ -40,10 +40,10 @@ done
 expect_no_out "Settings" "--commands shows only that section"
 
 run "$RES" --envs
-expect_out "RE_ZAP_PORT                 1234 (local/env.sh)" "--envs: a value from local/env.sh, aligned"
-expect_out "RE_ZAP_SNAPSHOT             not set, default: zap-ready" "--envs: a default"
-RE_ZAP_SNAPSHOT=mine run "$RES" --envs
-expect_out "RE_ZAP_SNAPSHOT             mine (environment)" "--envs: a value from the environment"
+expect_out "RE_PROXY_PORT               1234 (local/env.sh)" "--envs: a value from local/env.sh, aligned"
+expect_out "RE_EMULATOR_SNAPSHOT        not set, default: re-ready" "--envs: a default"
+RE_EMULATOR_SNAPSHOT=mine run "$RES" --envs
+expect_out "RE_EMULATOR_SNAPSHOT        mine (environment)" "--envs: a value from the environment"
 
 run "$RES" -m binary --commands --envs
 expect_out "bin-triage" "-m keeps that module"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Turn the ZAP proxy on or off on a running emulator or device.
+# Turn the HTTP proxy on or off on a running emulator or device.
 # shellcheck source=../lib.sh
 _re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
 while [ -L "$_re_self" ]; do
@@ -12,12 +12,15 @@ usage() {
     cat <<EOF
 Usage: device-proxy [-s SERIAL] on|off|status
 
-Switches the ZAP proxy of a running emulator or device, without a restart or a
-snapshot reset (launch-emulator sets it up at boot). On a physical device, run
-'off' (or release-device) before unplugging it.
+Switches the global HTTP proxy of a running emulator or device, pointing it at
+your intercepting proxy (ZAP, Burp, mitmproxy, ...), without a restart or a
+snapshot reset ('launch-emulator --proxy PORT --ca FILE' sets one up at boot).
+'off' clears any global HTTP proxy, and on a physical device the adb reverse
+tunnel that proxy goes through. On a physical device, run 'off' (or
+release-device) before unplugging it.
 
 Actions:
-  on      Route the device's traffic through ZAP on port $RE_ZAP_PORT: sets the
+  on      Route the device's traffic to port $RE_PROXY_PORT on this machine: sets the
           global HTTP proxy, and for a physical device the adb reverse tunnel
   off     Clear the proxy (and the tunnel), so the device has normal network access
   status  Show the current proxy setting
@@ -47,14 +50,14 @@ SERIAL=$(re_pick_device "device-proxy $ACTION -s" "$SERIAL") || exit 1
 
 case "$ACTION" in
     on)
-        PROXY=$(re_zap_proxy "$SERIAL") || re_die "could not forward port $RE_ZAP_PORT to ZAP (adb reverse)."
+        PROXY=$(re_proxy_address "$SERIAL") || re_die "could not forward port $RE_PROXY_PORT (adb reverse)."
         adb -s "$SERIAL" shell settings put global http_proxy "$PROXY" || exit 1
-        re_port_listening "$RE_ZAP_PORT" || re_warn "nothing listens on port $RE_ZAP_PORT, is ZAP running?"
-        echo "$SERIAL: proxy on, traffic goes to ZAP via $PROXY."
+        re_warn_proxy_down
+        echo "$SERIAL: proxy on, traffic goes to port $RE_PROXY_PORT on this machine via $PROXY."
         case "$SERIAL" in emulator-*) ;; *) echo "Run 'device-proxy -s $SERIAL off' before unplugging it, or its network stops working." ;; esac
         ;;
     off)
-        re_zap_proxy_off "$SERIAL" || exit 1
+        re_proxy_off "$SERIAL" || exit 1
         echo "$SERIAL: proxy off."
         ;;
     status)

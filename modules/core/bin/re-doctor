@@ -21,7 +21,7 @@ usage() {
     cat <<EOF
 Usage: re-doctor [MODULE...]
 
-Checks the shell setup, the ZAP certificate and proxy, then each module's
+Checks the shell setup, the proxy's CA certificate and port, then each module's
 tools, emulators and connected devices, and says how to fix what's missing.
 Read-only. Exits non-zero if something required is missing.
 

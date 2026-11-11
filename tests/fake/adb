@@ -18,7 +18,11 @@ case "${1:-}" in
         [ -n "$STATE" ] || { echo "error: device '$SER' not found" >&2; exit 1; }
         echo "$STATE" ;;
     root) echo "restarting adbd as root" ;;
-    wait-for-device|connect|start-server|push|install-multiple|reboot) ;;
+    wait-for-device|connect|start-server|install-multiple|reboot) ;;
+    push)
+        # Remembers a pushed CA (<hash>.0), which release-device looks for
+        shift
+        for A in "$@"; do case "$A" in *.0) echo "/data/local/tmp/re-ext/${A##*/}" >"$S/ca.$SER" ;; esac; done ;;
     pull)
         # Files a test put under $FAKE_STATE/files/<remote path> come back,
         # into an existing directory or as the named file, as adb does
@@ -68,6 +72,8 @@ case "${1:-}" in
                 done ;;
             "settings get global http_proxy") if [ -f "$S/proxy.$SER" ]; then cat "$S/proxy.$SER"; else echo null; fi ;;
             "settings put global http_proxy "*) echo "${CMD##* }" >"$S/proxy.$SER" ;;
+            # release-device: lists the pushed CA, then deletes the folder
+            "ls /data/local/tmp/re-ext/*.0 "*"rm -rf /data/local/tmp/re-ext") cat "$S/ca.$SER" 2>/dev/null; rm -f "$S/ca.$SER" ;;
             "pm path "*) printf 'package:/data/app/fake/base.apk\r\n' ;;
             # frida-server: pushed (with its version file), started, found by pidof, killed
             *"frida-server.version'"*"echo "*) echo "$CMD" | sed 's/.*echo \([^ ]*\) >.*/\1/' >"$S/frida-version.$SER" ;;

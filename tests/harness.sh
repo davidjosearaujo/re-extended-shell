@@ -12,8 +12,8 @@ trap 'rm -rf "$T_DIR"' EXIT
 # fakes ahead of any real adb/emulator/frida/scrcpy on PATH
 export HOME="$T_DIR/home" TMPDIR="$T_DIR/tmp"
 mkdir -p "$HOME" "$TMPDIR"
-unset ANDROID_HOME ANDROID_SDK_ROOT ANDROID_NDK_HOME JAVA_HOME RE_ZAP_PORT RE_ZAP_CERT \
-      RE_ZAP_SNAPSHOT JADX JADX_GUI APKEDITOR_JAR RE_FRIDA_UNPIN_REF RE_FRIDA_UNPIN_SCRIPTS \
+unset ANDROID_HOME ANDROID_SDK_ROOT ANDROID_NDK_HOME JAVA_HOME RE_PROXY_PORT RE_PROXY_CERT \
+      RE_EMULATOR_SNAPSHOT JADX JADX_GUI APKEDITOR_JAR RE_FRIDA_UNPIN_REF RE_FRIDA_UNPIN_SCRIPTS \
       RE_CONTAINER_ENGINE RE_ANDROID_CONTAINER_IMAGE
 export PATH="$TESTS/fake:$REPO/modules/core/bin:$REPO/modules/android/bin:$REPO/modules/binary/bin:$PATH"
 
@@ -46,12 +46,12 @@ fake_avd() {
 # fake_device SERIAL [STATE]: a connected physical device
 fake_device() { echo "$1||${2:-device}" >>"$FAKE_STATE/devices"; }
 
-# A throwaway self-signed CA, for the commands that need $RE_ZAP_CERT
+# A throwaway self-signed CA, for the commands that need $RE_PROXY_CERT
 fake_cert() {
     command -v openssl >/dev/null 2>&1 || return 1
-    export RE_ZAP_CERT="$T_DIR/zap.cer"
-    [ -f "$RE_ZAP_CERT" ] || openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=Test ZAP CA" \
-        -keyout "$T_DIR/zap.key" -out "$RE_ZAP_CERT" >/dev/null 2>&1
+    export RE_PROXY_CERT="$T_DIR/proxy.cer"
+    [ -f "$RE_PROXY_CERT" ] || openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=Test Proxy CA" \
+        -keyout "$T_DIR/proxy.key" -out "$RE_PROXY_CERT" >/dev/null 2>&1
 }
 
 # run COMMAND [ARG...]: sets OUT (stdout and stderr) and RC. A command that

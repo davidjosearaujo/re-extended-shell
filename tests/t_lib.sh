@@ -76,9 +76,24 @@ expect_out "PHONE123" "re_adb_devices --physical lists phones"
 expect_no_out "emulator-5554" "...and not emulators"
 lib 're_boot_completed emulator-5554 && echo booted'
 expect_out "booted" "re_boot_completed"
-lib 're_zap_proxy emulator-5554'
-expect_out "10.0.2.2:9090" "re_zap_proxy: emulator"
-lib 're_zap_proxy PHONE123'
-expect_out "127.0.0.1:9090" "re_zap_proxy: phone"
+lib 're_proxy_address emulator-5554'
+expect_out "10.0.2.2:9090" "re_proxy_address: emulator"
+lib 're_proxy_address PHONE123'
+expect_out "127.0.0.1:9090" "re_proxy_address: phone"
+
+# The proxy settings, and the older names they fall back to
+RE_ZAP_PORT=7777 lib 'echo "port=$RE_PROXY_PORT"'
+expect_out "port=7777" "RE_ZAP_PORT still sets the proxy port"
+RE_ZAP_PORT=7777 RE_PROXY_PORT=8080 lib 'echo "port=$RE_PROXY_PORT"'
+expect_out "port=8080" "...but RE_PROXY_PORT wins"
+# (certs/zap_root_ca.cer, from an older version, is used while there's no proxy_ca.cer)
+DEFAULT_CERT="$REPO/certs/proxy_ca.cer"
+[ -f "$DEFAULT_CERT" ] || [ ! -f "$REPO/certs/zap_root_ca.cer" ] || DEFAULT_CERT="$REPO/certs/zap_root_ca.cer"
+lib 'echo "port=$RE_PROXY_PORT cert=$RE_PROXY_CERT"'
+expect_out "port=9090 cert=$DEFAULT_CERT" "defaults: port 9090, certs/proxy_ca.cer"
+RE_ZAP_CERT=/x/old.cer lib 'echo "cert=$RE_PROXY_CERT"'
+expect_out "cert=/x/old.cer" "RE_ZAP_CERT still sets the certificate, even if the file is missing"
+RE_ZAP_CERT=/x/old.cer RE_PROXY_CERT=/x/new.cer lib 'echo "cert=$RE_PROXY_CERT"'
+expect_out "cert=/x/new.cer" "...but RE_PROXY_CERT wins"
 
 done_testing

@@ -11,10 +11,11 @@ git-ignored `local/` folder, so updates never conflict with them.
 
 **Modules:**
 
-- [Android](#android): emulators and rooted phones with ZAP's CA injected as a system
-  CA (Android 14+ included), Frida with SSL unpinning, pulling, decompiling and
+- [Android](#android): emulators and rooted phones, with a proxy's CA injected as a
+  system CA on request (Android 14+ included), Frida with SSL unpinning, pulling, decompiling and
   patching APKs, split APK/XAPK handling, per-app logs and live traffic capture.
-- [Binary](#binary): a first look at native executables and libraries (ELF, Mach-O, PE).
+- [Binary](#binary): a first look at native executables and libraries (ELF, Mach-O, PE),
+  and the protobuf schemas built into them.
 - [Core](#core): what every module shares, `re-doctor`, which checks your setup, and
   `re-extended-shell`, which shows everything that's installed.
 
@@ -24,8 +25,11 @@ More modules will follow. See [Adding a module](#adding-a-module).
 
 - Linux or macOS. The commands run on any bash from 3.2 up, so macOS's built-in
   `/bin/bash` is enough; your own shell can be bash or zsh
-- [ZAP](https://www.zaproxy.org/) for the modules that intercept traffic, listening on
-  `127.0.0.1:9090` by default (change with `RE_ZAP_PORT`)
+- An intercepting proxy to read the traffic: [ZAP](https://www.zaproxy.org/),
+  [Burp](https://portswigger.net/burp), [mitmproxy](https://mitmproxy.org/), Charles,
+  HTTP Toolkit... Any of them works: the commands only need its port and its root CA.
+  `device-proxy` and `frida-server --ssl-unpinning` expect it on `127.0.0.1:9090`
+  (change with `RE_PROXY_PORT`); `launch-emulator --proxy` takes the port you give it.
 - Each module's own tools, listed in its section. `re-doctor` tells you what's missing.
 
 On macOS, bash in a terminal runs as a login shell and reads `~/.bash_profile`, not
@@ -50,14 +54,19 @@ Running it again is safe: it updates that line in place, for example after you m
 the repo.
 
 `./uninstall` removes the hook and lists what the commands created outside the repo.
-`./uninstall --purge` also deletes those (downloads, caches, the `zap-ready` snapshots
+`./uninstall --purge` also deletes those (downloads, caches, the `re-ready` snapshots
 of your AVDs). Neither touches the repo itself, so delete it afterwards to remove your
 `local/` settings and `certs/` too.
 
-Then export ZAP's root CA certificate to `certs/zap_root_ca.cer`, either from
-*Tools → Options → Network → Server Certificates → Save*, or with
-`zap.sh -cmd -certpubdump certs/zap_root_ca.cer`. PEM and DER both work. Each module
-converts it to whatever format its targets expect.
+For `frida-server --ssl-unpinning` and `apk-patch`, export your intercepting proxy's
+root CA certificate to `certs/proxy_ca.cer` (or set `RE_PROXY_CERT`). PEM and DER both
+work; each module converts it to whatever format its targets expect. For example:
+
+| Proxy | Where its CA comes from |
+| --- | --- |
+| ZAP | *Tools → Options → Network → Server Certificates → Save*, or `zap.sh -cmd -certpubdump certs/proxy_ca.cer` |
+| Burp | *Proxy → Proxy settings → Import / export CA certificate* (DER) |
+| mitmproxy | `~/.mitmproxy/mitmproxy-ca-cert.pem` |
 
 Finally, run `re-doctor` to check that everything is in place, and
 `re-extended-shell` to see everything it installed.
@@ -87,7 +96,7 @@ conflict the next time you pull.
 
 1. Open `local/env.sh`. `./install` created it for you from
    [local.example/env.sh](local.example/env.sh), which lists every setting as a
-   commented example (ZAP port and certificate, `JAVA_HOME`, the Android SDK, jadx,
+   commented example (proxy port and certificate, `JAVA_HOME`, the Android SDK, jadx,
    and so on).
 2. Remove the `#` in front of the line you want and set your value. Keep the
    `export`, because the commands run as separate scripts and only see exported
@@ -95,7 +104,7 @@ conflict the next time you pull.
 
    ```sh
    export ANDROID_HOME="$HOME/sdk/android"
-   export RE_ZAP_PORT=8080
+   export RE_PROXY_PORT=8080
    ```
 
 3. Open a new terminal (or run `source ~/.bashrc` / `source ~/.zshrc`). The file is read
@@ -133,16 +142,19 @@ template, delete your `local/env.sh` and run `./install`.
 
 | Command | What it does |
 | --- | --- |
-| `re-doctor [MODULE...]` | Checks the shell hook and PATH, the ZAP certificate (format, expiry) and whether ZAP is listening, then each module's tools, emulators and connected devices, and says how to fix what's missing. Read-only. Exits non-zero if something required is missing. |
+| `re-doctor [MODULE...]` | Checks the shell hook and PATH, the proxy's CA certificate (format, expiry, if there is one) and whether something listens on the proxy port, then each module's tools, emulators and connected devices, and says how to fix what's missing. Read-only. Exits non-zero if something required is missing. |
 | `re-extended-shell` | Shows what's installed: the modules, every command with what it does, the settings with their value and where it comes from (`local/env.sh`, your environment, detected, or the default), the PATH entries the modules add, your aliases and functions, and the downloads and caches. `--modules`, `--commands`, `--envs`, `--paths`, `--aliases`, `--functions` and `--data` show one section each (combine them freely), `-m MODULE` narrows it to a module, `--version` prints the version. It flags what this shell is missing, e.g. a setting changed in `local/env.sh` since the shell started. |
 
 Settings shared by every module (set them in `local/env.sh`, see [Configuration](#configuration)):
 
 | Variable | Default |
 | --- | --- |
-| `RE_ZAP_PORT` | `9090` |
-| `RE_ZAP_CERT` | `certs/zap_root_ca.cer` |
+| `RE_PROXY_PORT` | `9090` |
+| `RE_PROXY_CERT` | `certs/proxy_ca.cer` |
 | `JAVA_HOME` | the JDK behind `java` on PATH, else a Homebrew `openjdk` (its `bin/` is added to PATH if no `java` is there yet) |
+
+`RE_ZAP_PORT`, `RE_ZAP_CERT` and `certs/zap_root_ca.cer`, the names older versions used,
+still work when the new ones aren't set.
 
 ## Android
 
@@ -150,18 +162,20 @@ Settings shared by every module (set them in `local/env.sh`, see [Configuration]
 
 | Command | What it does |
 | --- | --- |
-| `launch-emulator <AVD>` | Boots the AVD, injects the ZAP CA as a system CA and sets the global HTTP proxy to ZAP. The first boot saves a `zap-ready` snapshot, so later boots take seconds. `--clean` does a wiped boot that ignores the old snapshot and replaces it with a fresh one. Also pushes the matching frida-server build to the device (without starting it) when Frida is installed; `--start-frida-server` starts it too, `--no-frida` skips the push. |
-| `launch-emulator -d [-s SERIAL]` | Same setup on a rooted physical device (userdebug build, or `su` via Magisk/KernelSU). `-s` picks the phone when several are connected (and implies `-d`). Routes the proxy through `adb reverse`, opens [scrcpy](https://github.com/Genymobile/scrcpy) and pushes frida-server the same way. |
-| `release-device [-s SERIAL] [--reboot]` | Undoes `launch-emulator -d`: clears the proxy, removes the tunnel, stops frida-server, deletes the pushed files and closes scrcpy. Run it before unplugging the phone, or its network stops working. |
+| `launch-emulator <AVD>` | Starts the AVD as it is: no wipe, its state isn't saved on exit, nothing is changed on it. If it's already running, uses that emulator. Everything else is a flag: `--read-only` keeps nothing from the session (disk included); `--push-frida-server` pushes the frida-server build that matches your `frida --version`, and `--start-frida-server` starts it too; `--proxy`/`--ca` below. Root is only taken when a flag needs it. |
+| `launch-emulator --snapshot [NAME] <AVD>` | Boots from snapshot `NAME` (default `re-ready`), so boots take seconds. When the AVD has no such snapshot yet, boots it as it is, sets up what the other flags ask for and saves it under that name. `--clean` does a wiped boot first (erasing the AVD's user data), and replaces the snapshot if there is one; it's the only flag that wipes. frida-server goes into the snapshot; the CA and proxy never do. |
+| `launch-emulator --proxy PORT --ca FILE <AVD>` | Also injects `FILE` (your proxy's root CA, PEM or DER) as a system CA and sets the global HTTP proxy to `PORT` on this machine, e.g. `--proxy 8080 --ca ~/burp-ca.der` for Burp. The two go together. |
+| `launch-emulator -d [-s SERIAL]` | The same on a physical device, with `--proxy`/`--ca` and the frida-server flags (those need root: a userdebug build, or `su` via Magisk/KernelSU). `-s` picks the phone when several are connected (and implies `-d`). Routes the proxy through `adb reverse`, and opens [scrcpy](https://github.com/Genymobile/scrcpy). |
+| `release-device [-s SERIAL] [--reboot]` | Undoes `launch-emulator -d`: clears the proxy and the `adb reverse` tunnel it goes through (other tunnels are left alone), stops frida-server, deletes the pushed files and closes scrcpy. Run it before unplugging a phone that has a proxy set, or its network stops working. |
 | `kill-emulator [-f] <AVD>` | Shuts an emulator down cleanly by AVD name, killing it only if it won't exit. |
-| `reset-emulator [-s SERIAL \| -n AVD]` | Puts a running emulator back to its `zap-ready` snapshot without restarting it (a few seconds), dropping everything since: installed apps, app data, proxy changes. With one emulator running it's picked automatically; with several, name it with `-s` (serial) or `-n` (AVD name). |
-| `reset-emulator --save [-s SERIAL \| -n AVD]` | Saves the emulator's current state as the snapshot instead, so you can set up the app under test once and come back to it. `--snapshot NAME` (on either form) uses another snapshot, so you can keep several states. `--save` alone replaces the `zap-ready` one that `launch-emulator` boots from. |
-| `device-proxy [-s SERIAL] on\|off\|status` | Turns the ZAP proxy on or off on a running emulator or device without restarting it (for a physical device, the `adb reverse` tunnel too). `release-device` does the same and more when you unplug a phone. |
+| `reset-emulator [-s SERIAL \| -n AVD]` | Puts a running emulator back to its `re-ready` snapshot (the one `launch-emulator --snapshot` saves) without restarting it (a few seconds), dropping everything since: installed apps, app data, the proxy and CA `launch-emulator --proxy --ca` set up. With one emulator running it's picked automatically; with several, name it with `-s` (serial) or `-n` (AVD name). |
+| `reset-emulator --save [-s SERIAL \| -n AVD]` | Saves the emulator's current state as the snapshot instead, so you can set up the app under test once and come back to it. `--snapshot NAME` (on either form) uses another snapshot, so you can keep several states. `--save` alone replaces the `re-ready` one that `launch-emulator --snapshot` boots from. |
+| `device-proxy [-s SERIAL] on\|off\|status` | Points the global HTTP proxy at your proxy's port (`RE_PROXY_PORT`), or turns it off, on a running emulator or device without restarting it (for a physical device, the `adb reverse` tunnel too). `off` clears any global HTTP proxy. `release-device` does the same and more when you unplug a phone. |
 | `frida-server [-s SERIAL]` | Downloads the frida-server build that matches your `frida --version` and the device's CPU, pushes it and starts it as root. Does nothing if that version already runs. `--push-only` stops after the push, `--stop` kills it, `--refresh` downloads again. |
-| `frida-server --ssl-unpinning <PKG>` | Then spawns the app under Frida with [HTTP Toolkit's unpinning scripts](https://github.com/httptoolkit/frida-interception-and-unpinning): it trusts the ZAP CA despite certificate pinning, and is forced through the same proxy `launch-emulator` sets. `-l script.js` loads your own scripts too. |
+| `frida-server --ssl-unpinning <PKG>` | Then spawns the app under Frida with [HTTP Toolkit's unpinning scripts](https://github.com/httptoolkit/frida-interception-and-unpinning): it trusts your proxy's CA (`RE_PROXY_CERT`) despite certificate pinning, and is forced through your proxy (`RE_PROXY_PORT`). `-l script.js` loads your own scripts too. |
 | `apk-pull [-s SERIAL] <PKG>` | Pulls every APK of an installed app (base + splits) into `./<PKG>-splits/`. With `--merge`, saves a single installable `./<PKG>.apk` instead (merged with `xapk-merger` when the app has splits; `-k/-p/-a` sign it with your own keystore). `-o` sets the output, `-f` replaces an existing one. |
 | `apk-decompile <file.apk>` | Decompiles into `./<name>/jadx/` (Java, with [jadx](https://github.com/skylot/jadx)) and `./<name>/apktool/` (smali, manifest and resources, with [apktool](https://apktool.org)), running whichever is installed. |
-| `apk-patch <file.apk>` | For phones you can't root: makes the app trust user CAs and the ZAP CA (embedded in the APK), overriding `<pin-set>`s, allows cleartext, sets `debuggable`, then rebuilds and signs it. `-o` sets the output, `-f` replaces an existing one. |
+| `apk-patch <file.apk>` | For phones you can't root: makes the app trust user CAs and your proxy's CA (`RE_PROXY_CERT`, embedded in the APK), overriding `<pin-set>`s, allows cleartext, sets `debuggable`, then rebuilds and signs it. `-o` sets the output, `-f` replaces an existing one. |
 | `apk-info [-s SERIAL] <file.apk \| PKG>` | A static first look at an app, without decompiling it: the components other apps can reach and the permission guarding each (flagging those anyone can get), the URIs its deep links open, `debuggable`/`allowBackup`/cleartext, its network security config (cleartext, user CAs, pins, debug overrides), the permissions it asks for and declares, its signature (debug certificate, Janus), and its code (dex, native libraries, and whether it's Flutter, React Native, Xamarin, Unity, Cordova or Capacitor). Works on a file or on an installed app, by package name. `--all` lists the components that aren't exported too. |
 | `app-intent [-s SERIAL] <PKG> [COMPONENT]` | Without a component, lists the app's exported components, numbered. With one (number, full name or `.ShortName`), starts it as another app would: `am start` for an activity, `am startservice`, `am broadcast`, or `content query` on a provider. `--action`, `--data URI` and `-e KEY=VALUE` fill the intent, and arguments after `--` go to `am`/`content`. `--data` alone tries a deep link. It runs as the shell user even when adbd is root, so it's refused where another app would be; `--root` reaches the components that aren't exported. |
 | `app-data [-s SERIAL] [--diff DIR] <PKG>` | Copies the app's private storage off a rooted device (`/data/data`, device-encrypted storage, external storage) into `./<PKG>-data/`, then lists its preferences, databases and the keys, tokens and password-like lines in them (with `stringx`, keys in databases and binary files too). `--diff DIR` compares the copy with an earlier one: preferences and other text files line by line, databases row by row (with `sqlite3`), so you see what an action in the app writes. |
@@ -177,7 +191,8 @@ including AVD names, device serials and the packages installed on the device.
 A typical session with an app that pins its certificates:
 
 ```sh
-launch-emulator Pixel_8_API_34          # CA injected, proxied through ZAP, frida-server pushed
+launch-emulator --snapshot --push-frida-server --proxy 8080 --ca certs/proxy_ca.cer Pixel_8_API_34
+                                        # from a snapshot, your proxy's CA injected, traffic sent to it
 xapk-installer app.xapk                 # or install it from the Play Store
 apk-info com.example.app                # what it exposes, how it treats TLS
 frida-server --ssl-unpinning com.example.app
@@ -227,7 +242,8 @@ so apps launched afterwards trust the CA too. On older Android versions it only 
 `/system/etc/security/cacerts`. Nothing is written to the system partition, and a reboot
 reverts everything. The technique comes from
 [HTTP Toolkit](https://httptoolkit.com/blog/android-14-install-system-ca-certificate/).
-The `<hash>.0` file Android expects is generated from your ZAP certificate on every run.
+It runs when you pass `launch-emulator --ca`. The `<hash>.0` file Android expects is
+generated from that certificate on every run.
 
 ### SSL unpinning
 
@@ -235,18 +251,18 @@ A system CA is enough for most apps, but not for those that pin their certificat
 `frida-server --ssl-unpinning <PKG>` handles those on rooted devices and emulators. It
 loads these scripts from HTTP Toolkit's
 [frida-interception-and-unpinning](https://github.com/httptoolkit/frida-interception-and-unpinning),
-with your ZAP CA and proxy filled into their `config.js`:
+with your proxy's CA and address filled into their `config.js`:
 
 | Script | Effect |
 | --- | --- |
-| `native-tls-hook.js` | Native BoringSSL clients trust the ZAP CA |
+| `native-tls-hook.js` | Native BoringSSL clients trust your proxy's CA |
 | `android/android-proxy-override.js` | The app uses the proxy, even if it ignores the system setting |
-| `android/android-system-certificate-injection.js` | Java trust stores trust the ZAP CA |
+| `android/android-system-certificate-injection.js` | Java trust stores trust your proxy's CA |
 | `android/android-certificate-unpinning.js` | Disables known pinning (OkHttp, TrustKit, Conscrypt, ...) |
 | `android/android-certificate-unpinning-fallback.js` | Patches unknown pinning after its first failure |
 
-The proxy is the one `launch-emulator` sets: `10.0.2.2:$RE_ZAP_PORT` on emulators, and
-`127.0.0.1:$RE_ZAP_PORT` over `adb reverse` on other devices. The scripts are
+The proxy is yours, on this machine: `10.0.2.2:$RE_PROXY_PORT` on emulators, and
+`127.0.0.1:$RE_PROXY_PORT` over `adb reverse` on other devices. The scripts are
 AGPL-licensed, so they're downloaded on first use instead of being part of this repo.
 `RE_FRIDA_UNPIN_SCRIPTS` changes the list (for example to add
 `android/android-disable-root-detection.js`), and `RE_FRIDA_UNPIN_REF` pins a commit or
@@ -263,7 +279,7 @@ Put these in `local/env.sh`:
 | --- | --- |
 | `ANDROID_HOME` | the SDK in the default Android Studio location |
 | `ANDROID_NDK_HOME` | the newest NDK in `$ANDROID_HOME/ndk` |
-| `RE_ZAP_SNAPSHOT` | `zap-ready` |
+| `RE_EMULATOR_SNAPSHOT` | `re-ready` |
 | `RE_CONTAINER_ENGINE` | `podman`, falling back to `docker` |
 | `RE_ANDROID_CONTAINER_IMAGE` | `us-docker.pkg.dev/android-emulator-268719/images/30-google-x64` |
 | `APKEDITOR_JAR` | `apkeditor` on PATH, else downloaded to `~/.local/share/re-extended-shell/apkeditor/` |
@@ -277,10 +293,13 @@ frida-server builds and the unpinning scripts are cached in
 
 ### Notes
 
-- `launch-emulator` on an AVD without a `zap-ready` snapshot does a **wiped boot**,
-  which erases that AVD's user data, then saves the snapshot.
-- `adb shell settings put global http_proxy` persists across reboots. On an emulator
-  this is what you want. On a phone, run `release-device` when you're done.
+- Only `launch-emulator --clean` does a **wiped boot**, which erases that AVD's user
+  data. Everything else starts the AVD as it is.
+- The global HTTP proxy (`launch-emulator --proxy`, `device-proxy on`) persists across
+  reboots. On a phone, run `release-device` (or `device-proxy off`) when you're done.
+- Snapshots called `zap-ready`, saved by older versions, have ZAP's CA and proxy in
+  them and aren't used any more. `launch-emulator --snapshot` points them out; delete them
+  from the AVD's `snapshots/` folder.
 - `apk-patch` and `xapk-merger` re-sign the app with a different key, so uninstall the
   original before installing their output. Apps that check their own signature notice.
 
@@ -293,16 +312,18 @@ Native executables and libraries on Linux, macOS and Windows, with no device inv
 | Command | What it does |
 | --- | --- |
 | `bin-triage <file>` | A first look at an ELF, Mach-O or PE file, in one report: file type, size and hashes (MD5, SHA-1, SHA-256); whole-file entropy, which flags packed or encrypted files; hardening (PIE, NX, RELRO, stack canary, fortify and stripped for ELF; PIE, canary, signed and encrypted for Mach-O; ASLR, DEP and control-flow guard for PE); the libraries it links; the imports that matter (exec, network, memory, anti-debugging); the URLs, IP addresses, e-mail addresses, paths, keys and password-like strings in its text; and, with `stringx` (see Requirements below), what's hidden in Base64, hex, gzip or zlib data. `-n` sets the shortest string, `-l` how many lines each list shows, `--xor` also tries every single-byte XOR key (slow), and `--decode` decodes files over 32 MiB too. Other files get the generic parts. It only reads the file, it never runs it. |
+| `proto-extract <file \| dir>...` | Recovers the `.proto` files an app was built with, so its protobuf traffic can be decoded with field names instead of numbers. Code generated for the full protobuf runtime embeds each `.proto` file as a descriptor; this finds them in native libraries and executables (C++, Go, Rust, ...), in dex files (Java), in Python modules, and inside APK, JAR and other zip archives, and writes them back as `.proto` source into `./<name>-protos/` under their own paths. `--all` keeps the standard `google/protobuf` ones. Then: `protoc --decode=pkg.Message -I <name>-protos file.proto < body.bin`. Apps built with protobuf-lite (most Android apps) carry no descriptors. |
 
 ### Requirements
 
 - `file`.
+- `python3` for the entropy figure and `proto-extract` (standard library only).
 - `stringx` to read the strings: ASCII and UTF-16 (which binutils `strings` misses, and
   Windows binaries are full of), its secret patterns, and decoding. Without it,
   `bin-triage` falls back to `strings` (binutils; on macOS the Xcode command line tools),
   ASCII only and without the decoded section.
 - For the format details: `readelf` for ELF, `objdump` for PE (both from binutils), `otool` and `nm` for Mach-O.
-- `python3` for the entropy figure. Anything missing is skipped and named in the report, and `re-doctor` lists it.
+- Anything missing is skipped and named in the report, and `re-doctor` lists it.
 
 ## Layout and customisation
 
@@ -325,10 +346,11 @@ modules/
     doctor.sh             re-doctor checks
     purge.sh              what ./uninstall --purge deletes
     device/               (android) files that run on the device
+    libexec/              (binary) helper programs the commands run
 local/                  YOUR files (git-ignored), see below
 local.example/          templates for local/ (the installer copies them)
 lib/rc.sh               shell rc handling for install and uninstall
-certs/                  your ZAP root CA (git-ignored)
+certs/                  your proxy's root CA (git-ignored)
 ```
 
 The modules load one kind of file at a time, `core` first and the others
@@ -366,6 +388,7 @@ A module is a folder in `modules/`, picked up automatically. Every file in it bu
 | `functions.sh`, `aliases.sh` | Shell functions and aliases. |
 | `completions.bash`, `completions.zsh` | Tab completion. `_re_reply_words`, `_re_reply_files` and `_re_reply_dirs` from `core/completions.bash` are available. |
 | `doctor.sh` | Checks for `re-doctor`, with its `doc_ok`, `doc_warn`, `doc_fail`, `doc_info` and `doc_tool` helpers. |
+| `libexec/` | Helper programs the commands run that aren't commands themselves, such as a Python script (standard library only, run with `python3 -I`). |
 | `purge.sh` | Calls `re_purge <path> [label]` for each file or folder its commands leave outside the repo (except under `$RE_DATA_DIR`, which core already covers). |
 | `README.md` (the main one) | A section with the module's commands, requirements and settings, plus a line under **Modules**. |
 

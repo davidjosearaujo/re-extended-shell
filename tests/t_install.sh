@@ -9,10 +9,10 @@ mkdir -p "$COPY"
 # Loading: PATH gets every module's bin, and local/env.sh wins over detection
 mkdir -p "$COPY/local"
 cat >"$COPY/local/env.sh" <<'SH'
-export RE_ZAP_PORT=1234
+export RE_PROXY_PORT=1234
 export ANDROID_HOME="/nonexistent/sdk"
 SH
-run env -i HOME="$HOME" PATH=/usr/bin:/bin bash -c ". '$COPY/re_extended_shell_main'; echo PORT=\$RE_ZAP_PORT; echo SDK=\$ANDROID_HOME; echo \$PATH"
+run env -i HOME="$HOME" PATH=/usr/bin:/bin bash -c ". '$COPY/re_extended_shell_main'; echo PORT=\$RE_PROXY_PORT; echo SDK=\$ANDROID_HOME; echo \$PATH"
 expect_rc 0 "the loader sources cleanly"
 expect_out "PORT=1234" "local/env.sh sets a setting"
 expect_out "SDK=/nonexistent/sdk" "...and wins over SDK detection"

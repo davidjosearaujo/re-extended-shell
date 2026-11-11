@@ -13,4 +13,17 @@ _re_complete_bin_triage() {
     fi
 }
 
+_re_complete_proto_extract() {
+    local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
+    case "$prev" in
+        -o|--output) _re_reply_dirs; return ;;
+    esac
+    if [[ "$cur" == -* ]]; then
+        _re_reply_words "-o --output -f --force --all -h --help"
+    else
+        _re_reply_files ""
+    fi
+}
+
 complete -F _re_complete_bin_triage bin-triage
+complete -F _re_complete_proto_extract proto-extract

@@ -104,6 +104,7 @@ for NAME in $( (grep -rhoE '\$\{(RE_[A-Z0-9_]+|[A-Z0-9_]+_(HOME|JAR)|JADX[A-Z_]*
                 grep -hoE '^# export [A-Z][A-Z0-9_]*=' "$REPO/local.example/env.sh" | sed 's/^# export //; s/=$//') | sort -u); do
     case "$NAME" in
         RE_EXT_HOME|TMPDIR|NO_COLOR|ANDROID_AVD_HOME|ANDROID_SDK_ROOT) continue ;;   # not settings of ours
+        RE_ZAP_PORT|RE_ZAP_CERT) continue ;;   # older names, read as fallbacks of RE_PROXY_*
     esac
     grep -qxF "$NAME" <<<"$NAMES" && pass "$NAME is declared in a manifest" || fail "$NAME is declared in a manifest"
 done

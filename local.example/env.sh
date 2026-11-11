@@ -3,14 +3,15 @@
 # Keep the 'export'. This folder is git-ignored.
 
 # Core
-# export RE_ZAP_PORT=8080
-# export RE_ZAP_CERT="$HOME/zap/zap_root_ca.cer"
+# Your intercepting proxy (ZAP, Burp, mitmproxy, ...): its port and root CA
+# export RE_PROXY_PORT=8080
+# export RE_PROXY_CERT="$HOME/.mitmproxy/mitmproxy-ca-cert.pem"
 # export JAVA_HOME="/usr/lib/jvm/java-21-openjdk-amd64"
 
 # Android
 # export ANDROID_HOME="$HOME/sdk/android"
 # export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
-# export RE_ZAP_SNAPSHOT=zap-ready
+# export RE_EMULATOR_SNAPSHOT=re-ready
 # export RE_CONTAINER_ENGINE=podman
 # export RE_ANDROID_CONTAINER_IMAGE=us-docker.pkg.dev/android-emulator-268719/images/30-google-x64
 # export APKEDITOR_JAR="$HOME/tools/APKEditor.jar"

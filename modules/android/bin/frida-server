@@ -26,10 +26,10 @@ is already running. Needs root (adb root, or su via Magisk/KernelSU).
 Options:
   -s, --serial SERIAL      Device to use (optional with a single device)
   --ssl-unpinning PACKAGE  Then spawn PACKAGE under Frida with HTTP Toolkit's
-                           unpinning scripts: the app trusts the ZAP CA despite
-                           certificate pinning, and goes through the same proxy
-                           launch-emulator sets (port $RE_ZAP_PORT on this
-                           machine). Exit the Frida REPL (Ctrl+D) to detach.
+                           unpinning scripts: the app trusts your proxy's CA
+                           despite certificate pinning, and goes through it (port
+                           $RE_PROXY_PORT on this machine, CA in RE_PROXY_CERT).
+                           Exit the Frida REPL (Ctrl+D) to detach.
   -l, --load SCRIPT        Extra Frida script to load after the unpinning ones
                            (repeatable, needs --ssl-unpinning)
   --push-only              Only put the binary on the device, don't start it
@@ -189,15 +189,15 @@ WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
 re_prepare_cert "$WORK_DIR"
 
-# Same proxy as launch-emulator: the emulator reaches this machine at 10.0.2.2;
-# anything else gets the port tunnelled back over adb
-PROXY_HOST=$(re_zap_proxy "$SERIAL") || re_die "could not forward the device's port $RE_ZAP_PORT to ZAP (adb reverse)."
+# The emulator reaches this machine at 10.0.2.2; anything else gets the port
+# tunnelled back over adb
+PROXY_HOST=$(re_proxy_address "$SERIAL") || re_die "could not forward the device's port $RE_PROXY_PORT (adb reverse)."
 PROXY_HOST=${PROXY_HOST%:*}
-re_port_listening "$RE_ZAP_PORT" || re_warn "nothing listens on port $RE_ZAP_PORT, is ZAP running?"
+re_warn_proxy_down
 
-# config.js with the ZAP CA and proxy filled in
+# config.js with the proxy's CA and address filled in
 CONFIG="$WORK_DIR/config.js"
-awk -v pem="$RE_CERT_FILE" -v host="$PROXY_HOST" -v port="$RE_ZAP_PORT" -v q="'" '
+awk -v pem="$RE_CERT_FILE" -v host="$PROXY_HOST" -v port="$RE_PROXY_PORT" -v q="'" '
     /^const CERT_PEM = `/ {
         cert = ""
         while ((getline line < pem) > 0) cert = cert (cert == "" ? "" : "\n") line
@@ -210,7 +210,7 @@ awk -v pem="$RE_CERT_FILE" -v host="$PROXY_HOST" -v port="$RE_ZAP_PORT" -v q="'"
     { print }
 ' "$SCRIPTS_DIR/config.js" >"$CONFIG"
 if ! grep -q -- '-----BEGIN CERTIFICATE-----' "$CONFIG" || grep -qF '[!! Put your CA certificate' "$CONFIG" \
-        || ! grep -q "^const PROXY_PORT = $RE_ZAP_PORT;" "$CONFIG"; then
+        || ! grep -q "^const PROXY_PORT = $RE_PROXY_PORT;" "$CONFIG"; then
     re_die "could not fill in $SCRIPTS_DIR/config.js (its format changed?). Try --refresh, or pin RE_FRIDA_UNPIN_REF."
 fi
 
@@ -218,5 +218,5 @@ LOADS=(-l "$CONFIG")
 for SCRIPT in $UNPIN_SCRIPTS; do LOADS+=(-l "$SCRIPTS_DIR/$SCRIPT"); done
 for SCRIPT in "${EXTRA[@]}"; do LOADS+=(-l "$SCRIPT"); done
 
-echo "Spawning $PACKAGE with SSL unpinning (proxy $PROXY_HOST:$RE_ZAP_PORT). Exit the REPL to detach."
+echo "Spawning $PACKAGE with SSL unpinning (proxy $PROXY_HOST:$RE_PROXY_PORT). Exit the REPL to detach."
 frida -D "$SERIAL" -f "$PACKAGE" "${LOADS[@]}"

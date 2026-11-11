@@ -6,3 +6,5 @@
 # shellcheck source=../core/lib.sh
 . "$(dirname -- "${BASH_SOURCE[0]}")/../core/lib.sh"
 
+# shellcheck disable=SC2034  # used by the scripts that source this file
+RE_BINARY_DIR="$RE_EXT_HOME/modules/binary"   # libexec/ holds the helper programs

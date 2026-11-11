@@ -13,9 +13,10 @@ usage() {
 Usage: release-device [-s SERIAL] [--reboot]
 
 Undoes 'launch-emulator -d', so a physical device works normally once
-unplugged: closes scrcpy, clears the global HTTP proxy, removes the adb reverse
-tunnel, stops frida-server and deletes the pushed files. The injected CA stays
-trusted until the device reboots.
+unplugged: closes scrcpy, clears the global HTTP proxy and the adb reverse
+tunnel it goes through (other tunnels are left alone), stops frida-server and
+deletes the pushed files. An injected CA stays trusted until the device
+reboots.
 
 Options:
   -s, --serial SERIAL  Device to release (optional with a single device)
@@ -49,8 +50,11 @@ for PID in $(pgrep -x scrcpy); do
 done
 [ -n "$FOUND" ] && echo "Closed scrcpy."
 
-echo "Clearing the global HTTP proxy and the adb reverse tunnel for port $RE_ZAP_PORT..."
-re_zap_proxy_off "$SERIAL"
+PROXY=$(re_device_proxy "$SERIAL")
+if [ -n "$PROXY" ]; then
+    echo "Clearing the global HTTP proxy ($PROXY) and its adb reverse tunnel..."
+    re_proxy_off "$SERIAL" "$PROXY"
+fi
 
 # frida-server (from the frida-server command) runs out of the pushed files
 if [ -n "$("${ADB[@]}" shell "ls $RE_DEVICE_DIR/frida-server 2>/dev/null" | tr -d '\r')" ] \
@@ -61,13 +65,16 @@ if [ -n "$("${ADB[@]}" shell "ls $RE_DEVICE_DIR/frida-server 2>/dev/null" | tr -
     fi
 fi
 
-echo "Removing pushed CA and frida-server files..."
-"${ADB[@]}" shell rm -rf "$RE_DEVICE_DIR"
+# A <hash>.0 file there means launch-emulator injected a CA
+echo "Removing the pushed files..."
+CA=$("${ADB[@]}" shell "ls $RE_DEVICE_DIR/*.0 2>/dev/null; rm -rf $RE_DEVICE_DIR" | tr -d '\r')
 
 if [ -n "$REBOOT" ]; then
-    echo "Rebooting to drop the injected CA..."
+    echo "Rebooting${CA:+ to drop the injected CA}..."
     "${ADB[@]}" reboot
     echo "Device $SERIAL released and rebooting."
-else
+elif [ -n "$CA" ]; then
     echo "Device $SERIAL released. The injected CA stays trusted until the next reboot (use --reboot to drop it now)."
+else
+    echo "Device $SERIAL released."
 fi

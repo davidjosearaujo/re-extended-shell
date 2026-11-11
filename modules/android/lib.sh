@@ -9,7 +9,7 @@
 RE_ANDROID_DIR="$RE_EXT_HOME/modules/android"
 
 # Settings: export any of these (e.g. in local/env.sh) to override.
-RE_ZAP_SNAPSHOT="${RE_ZAP_SNAPSHOT:-zap-ready}"
+RE_EMULATOR_SNAPSHOT="${RE_EMULATOR_SNAPSHOT:-re-ready}"
 # shellcheck disable=SC2034  # used by the scripts that source this file
 RE_DEVICE_DIR="/data/local/tmp/re-ext"   # where files get pushed on the device
 # shellcheck disable=SC2034  # used by the scripts that source this file
@@ -72,24 +72,32 @@ re_boot_completed() {
     [ "$(adb -s "$1" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]
 }
 
-# Prints the host:port a device uses as its proxy to reach ZAP on this machine.
-# Emulators reach it at 10.0.2.2; anything else gets the port tunnelled back
-# over 'adb reverse' (set up here).
-# Usage: re_zap_proxy SERIAL
-re_zap_proxy() {
+# Prints the host:port a device uses as its proxy to reach PORT on this
+# machine (default: $RE_PROXY_PORT). Emulators reach it at 10.0.2.2; anything
+# else gets the port tunnelled back over 'adb reverse' (set up here).
+# Usage: re_proxy_address SERIAL [PORT]
+re_proxy_address() {
+    local PORT="${2:-$RE_PROXY_PORT}"
     case "$1" in
-        emulator-*) echo "10.0.2.2:$RE_ZAP_PORT" ;;
+        emulator-*) echo "10.0.2.2:$PORT" ;;
         *)
-            adb -s "$1" reverse "tcp:$RE_ZAP_PORT" "tcp:$RE_ZAP_PORT" >/dev/null || return 1
-            echo "127.0.0.1:$RE_ZAP_PORT" ;;
+            adb -s "$1" reverse "tcp:$PORT" "tcp:$PORT" >/dev/null || return 1
+            echo "127.0.0.1:$PORT" ;;
     esac
 }
 
 # Clears the global HTTP proxy on SERIAL and, for a physical device, the adb
-# reverse tunnel re_zap_proxy set up.
-re_zap_proxy_off() {
+# reverse tunnel that proxy goes through. Only that tunnel: others (another
+# tool's, on another port or with no proxy set) are left alone. PROXY is the
+# current proxy, when the caller already has it (re_device_proxy).
+# Usage: re_proxy_off SERIAL [PROXY]
+re_proxy_off() {
+    local P="${2-$(re_device_proxy "$1")}"
     adb -s "$1" shell settings put global http_proxy :0 || return 1
-    case "$1" in emulator-*) ;; *) adb -s "$1" reverse --remove "tcp:$RE_ZAP_PORT" >/dev/null 2>&1 ;; esac
+    case "$1:$P" in
+        emulator-*) ;;
+        *:127.0.0.1:*|*:localhost:*) adb -s "$1" reverse --remove "tcp:${P##*:}" >/dev/null 2>&1 ;;
+    esac
     return 0
 }
 
@@ -519,20 +527,21 @@ re_sign_apk() {
     fi
 }
 
-# Converts $RE_ZAP_CERT (PEM or DER) into the <subject_hash_old>.0 file Android
-# expects, inside OUT_DIR. Sets RE_CERT_HASH and RE_CERT_FILE.
-# Usage: re_prepare_cert OUT_DIR
+# Converts CERT (PEM or DER; default: $RE_PROXY_CERT) into the
+# <subject_hash_old>.0 file Android expects, inside OUT_DIR. Sets RE_CERT_HASH
+# and RE_CERT_FILE.
+# Usage: re_prepare_cert OUT_DIR [CERT]
 re_prepare_cert() {
-    local OUT_DIR="$1" FORM
-    re_require_zap_cert
+    local OUT_DIR="$1" CERT="${2:-$RE_PROXY_CERT}" FORM
+    if [ -n "${2:-}" ]; then
+        [ -f "$CERT" ] || re_die "certificate not found: $CERT"
+    else
+        re_require_proxy_cert
+    fi
     re_require openssl
-    for FORM in PEM DER; do
-        if RE_CERT_HASH=$(openssl x509 -inform "$FORM" -in "$RE_ZAP_CERT" -noout -subject_hash_old 2>/dev/null); then
-            RE_CERT_FILE="$OUT_DIR/$RE_CERT_HASH.0"
-            openssl x509 -inform "$FORM" -in "$RE_ZAP_CERT" -outform PEM -out "$RE_CERT_FILE" \
-                || re_die "could not convert $RE_ZAP_CERT to PEM."
-            return 0
-        fi
-    done
-    re_die "$RE_ZAP_CERT is not a PEM or DER X.509 certificate."
+    FORM=$(re_cert_form "$CERT") || re_die "$CERT is not a PEM or DER X.509 certificate."
+    RE_CERT_HASH=$(openssl x509 -inform "$FORM" -in "$CERT" -noout -subject_hash_old)
+    RE_CERT_FILE="$OUT_DIR/$RE_CERT_HASH.0"
+    openssl x509 -inform "$FORM" -in "$CERT" -outform PEM -out "$RE_CERT_FILE" \
+        || re_die "could not convert $CERT to PEM."
 }

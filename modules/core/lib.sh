@@ -7,10 +7,18 @@
 
 RE_EXT_HOME=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 
-# Interception proxy, shared by any module that routes traffic through ZAP.
-# Export either of these (e.g. in local/env.sh) to override.
-RE_ZAP_PORT="${RE_ZAP_PORT:-9090}"
-RE_ZAP_CERT="${RE_ZAP_CERT:-$RE_EXT_HOME/certs/zap_root_ca.cer}"
+# The intercepting proxy on this machine (ZAP, Burp, mitmproxy, Charles, ...):
+# its port and its root CA. Export either (e.g. in local/env.sh) to override.
+# RE_ZAP_PORT, RE_ZAP_CERT and certs/zap_root_ca.cer are the names older
+# versions used, still read so existing setups keep working.
+RE_PROXY_PORT="${RE_PROXY_PORT:-${RE_ZAP_PORT:-9090}}"
+if [ -z "${RE_PROXY_CERT:-${RE_ZAP_CERT:-}}" ]; then
+    RE_PROXY_CERT="$RE_EXT_HOME/certs/proxy_ca.cer"
+    [ -f "$RE_PROXY_CERT" ] || [ ! -f "$RE_EXT_HOME/certs/zap_root_ca.cer" ] \
+        || RE_PROXY_CERT="$RE_EXT_HOME/certs/zap_root_ca.cer"
+else
+    RE_PROXY_CERT="${RE_PROXY_CERT:-$RE_ZAP_CERT}"
+fi
 
 # Downloads and caches the commands keep outside the repo (removed by
 # './uninstall --purge'). Each module uses its own subdirectory.
@@ -295,14 +303,33 @@ re_version_lt() {
     }'
 }
 
-# Exits with export instructions unless $RE_ZAP_CERT exists
-re_require_zap_cert() {
-    [ -f "$RE_ZAP_CERT" ] && return 0
+# Prints PEM or DER, the format of the X.509 certificate FILE; fails if it
+# isn't one (or openssl is missing).
+re_cert_form() {
+    local F
+    for F in PEM DER; do
+        if openssl x509 -inform "$F" -in "$1" -noout 2>/dev/null; then echo "$F"; return 0; fi
+    done
+    return 1
+}
+
+# Warns when nothing listens on PORT (default: $RE_PROXY_PORT) on this machine.
+# Usage: re_warn_proxy_down [PORT]
+re_warn_proxy_down() {
+    re_port_listening "${1:-$RE_PROXY_PORT}" \
+        || re_warn "nothing listens on port ${1:-$RE_PROXY_PORT}, is your proxy running?"
+}
+
+# Exits with export instructions unless $RE_PROXY_CERT exists
+re_require_proxy_cert() {
+    [ -f "$RE_PROXY_CERT" ] && return 0
     cat >&2 <<EOF
-Error: ZAP root CA certificate not found at: $RE_ZAP_CERT
-Export it from ZAP (Tools > Options > Network > Server Certificates > Save),
-or from the command line with: zap.sh -cmd -certpubdump <file>
-then save it to that path, or point RE_ZAP_CERT at it (e.g. in local/env.sh).
+Error: your proxy's root CA certificate is not at: $RE_PROXY_CERT
+Export it from your intercepting proxy (PEM or DER), e.g.:
+  ZAP:        Tools > Options > Network > Server Certificates > Save
+  Burp:       Proxy > Proxy settings > Import / export CA certificate
+  mitmproxy:  ~/.mitmproxy/mitmproxy-ca-cert.pem
+then save it to that path, or point RE_PROXY_CERT at it (e.g. in local/env.sh).
 EOF
     exit 1
 }

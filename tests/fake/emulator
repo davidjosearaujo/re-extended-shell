@@ -6,10 +6,10 @@ if [ "${1:-}" = "-list-avds" ]; then
     for F in "${ANDROID_AVD_HOME:?}"/*.ini; do [ -f "$F" ] && basename -- "$F" .ini; done
     exit 0
 fi
-AVD="" PORT=""
+AVD="" PORT="" ARGS="$*"
 while [ "$#" -gt 0 ]; do
     case "$1" in -avd) AVD="$2"; shift ;; -port) PORT="$2"; shift ;; esac
     shift
 done
 echo "emulator-$PORT|$AVD|device" >>"${FAKE_STATE:?}/devices"
-echo "emulator -avd $AVD -port $PORT" >>"$FAKE_STATE/log"
+echo "emulator $ARGS" >>"$FAKE_STATE/log"

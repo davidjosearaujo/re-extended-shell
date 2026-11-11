@@ -6,13 +6,13 @@ run reset-emulator
 expect_rc 1 "no emulator running is an error"
 expect_out "no running emulator" "no emulator running says so"
 
-fake_reset; fake_emulator emulator-5554 TestAvd_A zap-ready
+fake_reset; fake_emulator emulator-5554 TestAvd_A re-ready
 run reset-emulator
 expect_rc 0 "one emulator: picked automatically"
-expect_log "-s emulator-5554 emu avd snapshot load zap-ready" "loads the default snapshot on it"
-expect_out "back at snapshot 'zap-ready'" "reports success"
+expect_log "-s emulator-5554 emu avd snapshot load re-ready" "loads the default snapshot on it"
+expect_out "back at snapshot 're-ready'" "reports success"
 
-fake_reset; fake_emulator emulator-5554 TestAvd_A zap-ready; fake_emulator emulator-5556 TestAvd_B zap-ready
+fake_reset; fake_emulator emulator-5554 TestAvd_A re-ready; fake_emulator emulator-5556 TestAvd_B re-ready
 run reset-emulator
 expect_rc 1 "several emulators and no target is an error"
 expect_out "emulator-5556 TestAvd_B" "lists the running emulators"
@@ -35,7 +35,7 @@ expect_rc 1 "a bare target is refused"
 fake_reset; fake_emulator emulator-5554 TestAvd_A
 run reset-emulator
 expect_rc 1 "missing snapshot is an error"
-expect_out "kill-emulator TestAvd_A  &&  launch-emulator TestAvd_A" "says how to get one"
+expect_out "kill-emulator TestAvd_A  &&  launch-emulator --snapshot TestAvd_A" "says how to get one"
 expect_no_log "snapshot load" "does not ask the emulator"
 
 fake_reset; fake_emulator emulator-5554 TestAvd_A
@@ -47,15 +47,15 @@ expect_out "didn't load the snapshot" "shows the emulator's refusal"
 fake_reset; fake_emulator emulator-5554 TestAvd_A
 run reset-emulator --save
 expect_rc 0 "--save works without an existing snapshot"
-expect_log "emu avd snapshot save zap-ready" "--save saves the default snapshot"
-[ -d "$ANDROID_AVD_HOME/TestAvd_A.avd/snapshots/zap-ready" ] && pass "the snapshot now exists" || fail "the snapshot now exists"
+expect_log "emu avd snapshot save re-ready" "--save saves the default snapshot"
+[ -d "$ANDROID_AVD_HOME/TestAvd_A.avd/snapshots/re-ready" ] && pass "the snapshot now exists" || fail "the snapshot now exists"
 run reset-emulator
 expect_rc 0 "...and a reset then works"
 
-fake_reset; fake_emulator emulator-5554 TestAvd_A zap-ready
+fake_reset; fake_emulator emulator-5554 TestAvd_A re-ready
 run reset-emulator --save --snapshot app-ready
 expect_log "emu avd snapshot save app-ready" "--save --snapshot saves under that name"
-expect_no_log "snapshot save zap-ready" "...and leaves the default alone"
+expect_no_log "snapshot save re-ready" "...and leaves the default alone"
 run reset-emulator --snapshot app-ready
 expect_log "emu avd snapshot load app-ready" "--snapshot loads that one"
 run reset-emulator --snapshot other
@@ -64,8 +64,8 @@ expect_out "reset-emulator -s emulator-5554 --save --snapshot other" "...and say
 run reset-emulator --snapshot 'bad name;x'
 expect_rc 1 "a snapshot name with odd characters is refused"
 
-fake_reset; fake_emulator emulator-5554 TestAvd_A zap-ready
-RE_ZAP_SNAPSHOT=custom run reset-emulator
-expect_out "no 'custom' snapshot" "RE_ZAP_SNAPSHOT changes the default"
+fake_reset; fake_emulator emulator-5554 TestAvd_A re-ready
+RE_EMULATOR_SNAPSHOT=custom run reset-emulator
+expect_out "no 'custom' snapshot" "RE_EMULATOR_SNAPSHOT changes the default"
 
 done_testing

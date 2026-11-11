@@ -1,0 +1,7 @@
+Serialized FileDescriptorProtos for tests/t_proto_extract.sh, and the .proto
+source proto-extract writes for them (without its two header lines).
+- orders.desc: a proto3 file built with Python's protobuf package (map, oneof,
+  proto3 optional, nested types, negative enum value, reserved ranges, a
+  service with a streaming method, an import, file options).
+- descriptor.desc: google/protobuf/descriptor.proto as the protobuf package
+  ships it (proto2: defaults, extension ranges, nested enums).
