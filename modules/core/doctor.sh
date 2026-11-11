@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # re-doctor checks of the core module: the shell hook, PATH, and ZAP.
 # Sourced by core/bin/re-doctor, which provides the doc_* helpers.
-# shellcheck disable=SC2154  # _re_shell_home and C_* come from bin/re-doctor
+# shellcheck disable=SC2154  # _re_shell_home comes from bin/re-doctor
 
 doc_section "RE Extended Shell"
 doc_info "$RE_OS $(uname -m), bash $BASH_VERSION, repo $(re_tilde "$RE_EXT_HOME")"

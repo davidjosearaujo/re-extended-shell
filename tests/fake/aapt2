@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Fake aapt2 for ./test: answers 'dump xmltree' and 'dump resources' for any
+# APK from the files in $FAKE_STATE/aapt2/ (a copy of a tests/fixtures/ folder,
+# captured from the real aapt2): <path with / as _>.tree and resources.txt.
+S="${FAKE_STATE:?FAKE_STATE not set}"
+echo "aapt2 $*" >>"$S/log"
+case "$1 ${2:-}" in
+    "dump xmltree")
+        [ "$3" = --file ] || exit 1
+        F="$S/aapt2/$(echo "$4" | tr / _).tree"
+        [ -f "$F" ] && cat "$F" ;;
+    "dump resources") cat "$S/aapt2/resources.txt" 2>/dev/null ;;
+    "version ") echo "Android Asset Packaging Tool (aapt) 2.19-fake" ;;
+    *) exit 1 ;;
+esac

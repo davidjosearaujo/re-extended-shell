@@ -122,6 +122,14 @@ re_emu_snapshot() {
     return 1
 }
 
+# Sets the array RE_APKS to the APK files under DIR (any depth).
+re_find_apks() {
+    RE_APKS=()
+    while IFS= read -r -d '' REPLY; do
+        RE_APKS+=("$REPLY")
+    done < <(find "$1" -type f -name '*.apk' -print0)
+}
+
 # Exits if FILE is a split-APK bundle: those have to be merged first.
 re_reject_bundle() {
     case "$1" in
@@ -207,6 +215,14 @@ re_root_mode() {
     return 1
 }
 
+# Prints how to run commands as root on SERIAL (re_root_mode, trying 'adb
+# root' first), or exits saying what's needed.
+# Usage: ROOT=$(re_require_root SERIAL) || exit 1
+re_require_root() {
+    re_root_mode --adb-root "$1" \
+        || re_die "no root on $1 (needs an emulator with a Google APIs image, a userdebug build, or su via Magisk/KernelSU)."
+}
+
 # Runs a shell command on SERIAL as root, MODE being what re_root_mode printed.
 # The command must not contain single quotes.
 # Usage: re_root_shell SERIAL MODE COMMAND
@@ -233,6 +249,205 @@ re_require_package() {
         sed 's/^/  /' <<<"$MATCHES" >&2
     fi
     exit 1
+}
+
+# Exits unless NAME is a valid package name (it ends up in device shell commands).
+re_check_package_name() {
+    case "$1" in
+        ""|*[!A-Za-z0-9._]*|.*|*.) re_die "not a valid package name: $1" ;;
+    esac
+}
+
+# Pulls PACKAGE's base APK from SERIAL into the file DEST, and sets RE_SPLITS
+# to the names of its split APKs (e.g. "config.arm64_v8a config.xxhdpi").
+# Usage: re_pull_base_apk SERIAL PACKAGE DEST
+re_pull_base_apk() {
+    local SERIAL="$1" PKG="$2" DEST="$3" LINE PATHS BASE="" FIRST="" NAME
+    RE_SPLITS=""
+    PATHS=$(adb -s "$SERIAL" shell pm path "$PKG" 2>/dev/null | tr -d '\r')
+    [ -n "$PATHS" ] || re_require_package "$SERIAL" "$PKG"   # exits, suggesting names
+    while IFS= read -r LINE; do
+        LINE=${LINE#package:}
+        case "$LINE" in
+            */base.apk) BASE="$LINE" ;;
+            *.apk)
+                NAME=${LINE##*/}; NAME=${NAME%.apk}; NAME=${NAME#split_}
+                RE_SPLITS="${RE_SPLITS:+$RE_SPLITS }$NAME"
+                [ -n "$FIRST" ] || FIRST="$LINE" ;;
+        esac
+    done <<<"$PATHS"
+    BASE=${BASE:-$FIRST}
+    [ -n "$BASE" ] || re_die "could not find the APK of $PKG."
+    adb -s "$SERIAL" pull "$BASE" "$DEST" >/dev/null 2>&1 && [ -s "$DEST" ] \
+        || re_die "could not pull $BASE."
+}
+
+# Sets RE_AAPT2 to the aapt2 to use (PATH, or the SDK build-tools), or exits.
+re_require_aapt2() {
+    RE_AAPT2=$(re_find_build_tool aapt2) \
+        || re_die "'aapt2' not found (PATH or \$ANDROID_HOME/build-tools). Install the SDK build-tools."
+}
+
+# Reads the binary XML file FILE (default: the manifest) of APK, as aapt2's
+# indented tree. Needs RE_AAPT2 (re_require_aapt2).
+# Usage: re_apk_xmltree APK [FILE]
+re_apk_xmltree() {
+    "$RE_AAPT2" dump xmltree --file "${2:-AndroidManifest.xml}" "$1" 2>/dev/null
+}
+
+# awk functions for aapt2's trees and the records below, put in front of an
+# awk program: awk "$RE_AWK_LIB"'...'
+#   xt(line)   parses a line of an aapt2 tree. Sets XT to E (element), A
+#              (attribute), T (text) or "" (anything else), XI to its
+#              indentation, XN to an element's name, XK and XV to an
+#              attribute's name (without namespace) and value (without
+#              quotes), XV to a text's value.
+#   bool(v)    true or false for aapt2's ways of writing a boolean, else v
+#   short(n)   .Name for a class in the package pkg (an awk variable)
+read -r -d '' RE_AWK_LIB <<'AWK' || true
+function xt(line,   s, eq) {
+    match(line, /^ */); XI = RLENGTH; s = substr(line, XI + 1)
+    XT = ""; XN = XK = XV = ""
+    if (s ~ /^E: /) { XT = "E"; XN = substr(s, 4); sub(/ .*/, "", XN) }
+    else if (s ~ /^A: /) {
+        s = substr(s, 4); eq = index(s, "=")
+        if (!eq) return
+        XT = "A"; XK = substr(s, 1, eq - 1); XV = substr(s, eq + 1)
+        sub(/\(0x[0-9a-fA-F]+\)$/, "", XK); sub(/.*:/, "", XK)
+        if (XV ~ /^"/) {
+            if (match(XV, /" \(Raw: /)) XV = substr(XV, 2, RSTART - 2)
+            else { XV = substr(XV, 2); sub(/"$/, "", XV) }
+        } else sub(/ .*/, "", XV)
+    } else if (s ~ /^T: /) { XT = "T"; XV = substr(s, 4); gsub(/^'|'$/, "", XV) }
+}
+function bool(v) {
+    if (v == "true" || v == "0xffffffff" || v == "-1") return "true"
+    if (v == "false" || v == "0x00000000" || v == "0") return "false"
+    return v
+}
+function short(n) { return (pkg != "" && index(n, pkg ".") == 1) ? substr(n, length(pkg) + 1) : n }
+AWK
+
+# Turns the manifest tree (re_apk_xmltree, on stdin) into '|'-separated
+# records, one per line:
+#   manifest|PACKAGE|VERSION_NAME|VERSION_CODE|MIN_SDK|TARGET_SDK|SHARED_UID
+#   application|DEBUGGABLE|ALLOW_BACKUP|USES_CLEARTEXT|NETWORK_SECURITY_CONFIG|TEST_ONLY
+#   uses-permission|NAME
+#   permission|NAME|PROTECTION_LEVEL          (permissions the app declares)
+#   component|N|TYPE|NAME|EXPORTED|PERMISSION|READ_PERMISSION|WRITE_PERMISSION|
+#             AUTHORITIES|ACTIONS|LINKS|LAUNCHER|TARGET|EXPLICIT
+# Booleans are true/false (empty when the attribute is absent). EXPORTED is
+# yes, no or ? (a resource reference), applying Android's defaults when the
+# attribute is absent: with an intent filter for activities, services and
+# receivers; on API 16 and lower for providers. EXPLICIT says whether the
+# manifest sets it. ACTIONS and LINKS are space-separated; LINKS are the URIs
+# its intent filters accept (scheme://host/path, '*' ending a prefix), for an
+# activity only from filters with the DEFAULT category, as links need. N is
+# the component's position in the manifest, from 1.
+re_manifest_records() {
+    awk "$RE_AWK_LIB"'
+        function clean(v) { gsub(/\|/, "%7C", v); gsub(/ /, "%20", v); return v }
+        function fullname(n) {
+            if (n ~ /^\./) return pkg n
+            if (n != "" && n !~ /\./) return pkg "." n
+            return n
+        }
+        function add(list, v) { return list == "" ? v : list " " v }
+        # Combines the <data> elements of the intent filter that just ended
+        function flush_filter(   i, j, k, l, n) {
+            n = 0
+            for (i = 1; i <= ns; i++) {
+                if (!nh) { l = sch[i] ":"; links[comp] = add(links[comp], clean(l)); continue }
+                for (j = 1; j <= nh; j++) {
+                    if (!np) { l = sch[i] "://" hst[j]; links[comp] = add(links[comp], clean(l)); continue }
+                    for (k = 1; k <= np; k++) {
+                        if (++n > 8) return
+                        l = sch[i] "://" hst[j] pth[k]
+                        links[comp] = add(links[comp], clean(l))
+                    }
+                }
+            }
+            if (!ns) for (i = 1; i <= nm; i++) links[comp] = add(links[comp], clean("type:" mim[i]))
+        }
+        function open_el(name) {
+            if (comp == 0 && (name == "activity" || name == "activity-alias" || name == "service" \
+                    || name == "receiver" || name == "provider") && EL[d - 1] == "application") {
+                comp = ++nc; cdepth = d; ctype[comp] = name
+            } else if (comp && name == "intent-filter") {
+                hasfilter[comp] = 1; fdepth = d; ns = nh = np = nm = 0; fdefault = 0
+            }
+        }
+        function close_el(i) {
+            # An activity is only opened by an implicit intent (a link) if the
+            # filter has the DEFAULT category
+            if (comp && i == fdepth) { if (fdefault || ctype[comp] !~ /^activity/) flush_filter(); fdepth = 0 }
+            if (comp && i == cdepth) comp = 0
+        }
+        function on_attr(el, k, v) {
+            if (el == "manifest") {
+                if (k == "package") pkg = v
+                else if (k == "versionName") vname = v
+                else if (k == "versionCode") vcode = v
+                else if (k == "sharedUserId") suid = v
+            } else if (el == "uses-sdk") {
+                if (k == "minSdkVersion") minsdk = v
+                else if (k == "targetSdkVersion") target = v
+            } else if (el ~ /^uses-permission/ && k == "name") {
+                uperm[++nu] = v
+            } else if (el == "permission" && d == pdepth) {
+                if (k == "name") pname[np_] = v
+                else if (k == "protectionLevel") plevel[np_] = v
+            } else if (el == "application") {
+                if (k ~ /^(debuggable|allowBackup|usesCleartextTraffic|testOnly)$/) app[k] = bool(v)
+                else if (k == "networkSecurityConfig") app[k] = v
+            } else if (comp && d == cdepth) {
+                if (k == "exported") cexp[comp] = bool(v)
+                else if (k ~ /^(name|permission|readPermission|writePermission|authorities|targetActivity)$/) cattr[comp, k] = v
+            } else if (comp && fdepth) {
+                if (el == "action" && k == "name") actions[comp] = add(actions[comp], v)
+                else if (el == "category" && k == "name" && v == "android.intent.category.LAUNCHER") launcher[comp] = 1
+                else if (el == "category" && k == "name" && v == "android.intent.category.DEFAULT") fdefault = 1
+                else if (el == "data") {
+                    if (k == "scheme") sch[++ns] = v
+                    else if (k == "host") hst[++nh] = v
+                    else if (k == "port" && nh) hst[nh] = hst[nh] ":" v
+                    else if (k == "path" || k == "pathPattern" || k == "pathAdvancedPattern") pth[++np] = v
+                    else if (k == "pathPrefix") pth[++np] = v "*"
+                    else if (k == "pathSuffix") pth[++np] = "*" v
+                    else if (k == "mimeType") mim[++nm] = v
+                }
+            }
+        }
+        {
+            xt($0)
+            if (XT == "E") {
+                while (d > 0 && IND[d] >= XI) { close_el(d); d-- }
+                d++; IND[d] = XI; EL[d] = XN
+                if (XN == "permission") { np_++; pdepth = d }
+                open_el(XN)
+            } else if (XT == "A" && d > 0) on_attr(EL[d], XK, XV)
+        }
+        END {
+            while (d > 0) { close_el(d); d-- }
+            if (minsdk == "") minsdk = 1
+            if (target == "") target = minsdk
+            print "manifest|" pkg "|" vname "|" vcode "|" minsdk "|" target "|" suid
+            print "application|" app["debuggable"] "|" app["allowBackup"] "|" app["usesCleartextTraffic"] "|" app["networkSecurityConfig"] "|" app["testOnly"]
+            for (i = 1; i <= nu; i++) print "uses-permission|" uperm[i]
+            for (i = 1; i <= np_; i++) if (pname[i] != "") print "permission|" pname[i] "|" plevel[i]
+            for (i = 1; i <= nc; i++) {
+                e = cexp[i]
+                if (e == "true") ex = "yes"
+                else if (e == "false") ex = "no"
+                else if (e != "") ex = "?"
+                else if (ctype[i] == "provider") ex = (minsdk + 0 <= 16 || target + 0 <= 16) ? "yes" : "no"
+                else ex = hasfilter[i] ? "yes" : "no"
+                print "component|" i "|" ctype[i] "|" fullname(cattr[i, "name"]) "|" ex "|" cattr[i, "permission"] "|" \
+                    cattr[i, "readPermission"] "|" cattr[i, "writePermission"] "|" cattr[i, "authorities"] "|" \
+                    actions[i] "|" links[i] "|" (launcher[i] ? "launcher" : "") "|" fullname(cattr[i, "targetActivity"]) "|" \
+                    (e != "" ? "explicit" : "")
+            }
+        }'
 }
 
 # Prints the path of an SDK build tool (apksigner, zipalign, ...): on PATH, or

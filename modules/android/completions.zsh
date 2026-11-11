@@ -158,6 +158,42 @@ _re_applog() {
         '*::logcat argument: '
 }
 
+_re_apk_or_package() {
+    _alternative 'files:APK file:_files -g "*.(#i)apk(-.)"' 'packages:package:_re_packages'
+}
+
+_re_apk_info() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '(-s --serial)'{-s,--serial}'[device to pull the app from]:device serial:_re_serials' \
+        '--all[also list components that are not exported]' \
+        '1:APK file or package:_re_apk_or_package'
+}
+
+_re_app_data() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '(-s --serial)'{-s,--serial}'[device to pull from]:device serial:_re_serials' \
+        '(-o --output)'{-o,--output}'[output directory]:directory:_files -/' \
+        '(-f --force)'{-f,--force}'[replace an existing output]' \
+        '--diff[show what changed since an earlier copy]:earlier copy:_files -/' \
+        '1:package:_re_packages'
+}
+
+_re_app_intent() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '(-s --serial)'{-s,--serial}'[device to use]:device serial:_re_serials' \
+        '--all[also list components that are not exported]' \
+        '--root[run as root, reaching components that are not exported]' \
+        '--action[intent action]:action:(android.intent.action.VIEW android.intent.action.SEND android.intent.action.MAIN android.intent.action.BOOT_COMPLETED)' \
+        '--data[intent data URI]:URI: ' \
+        '*'{-e,--extra}'[string extra]:KEY=VALUE: ' \
+        '1:package:_re_packages' \
+        '2:component (number or name): ' \
+        '*::am argument: '
+}
+
 compdef _re_launch_emulator launch-emulator
 compdef _re_kill_emulator kill-emulator
 compdef _re_reset_emulator reset-emulator
@@ -172,3 +208,6 @@ compdef _re_apk_pull apk-pull
 compdef _re_apk_decompile apk-decompile
 compdef _re_apk_patch apk-patch
 compdef _re_applog applog
+compdef _re_apk_info apk-info
+compdef _re_app_data app-data
+compdef _re_app_intent app-intent

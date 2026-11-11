@@ -1,7 +1,6 @@
 # shellcheck shell=bash
 # re-doctor checks of the Android module. Sourced by core/bin/re-doctor, which
 # provides the doc_* helpers. Read-only: never runs su or changes a device.
-# shellcheck disable=SC2154  # C_* come from bin/re-doctor
 
 # shellcheck source=lib.sh
 . "$RE_EXT_HOME/modules/android/lib.sh"
@@ -29,11 +28,16 @@ if [ "$RE_OS" = Linux ]; then
         doc_ok "/dev/kvm accessible"
     fi
 fi
-for TOOL in apksigner zipalign; do
+for TOOL in aapt2 apksigner zipalign; do
+    case "$TOOL" in
+        aapt2)     USERS="apk-info, app-intent" ;;
+        apksigner) USERS="xapk-merger, apk-pull --merge, apk-patch, apk-info (signature)" ;;
+        *)         USERS="xapk-merger, apk-pull --merge, apk-patch" ;;
+    esac
     if P=$(re_find_build_tool "$TOOL"); then
         doc_ok "$TOOL ${RE_C_DIM}$(re_tilde "$P")${RE_C_OFF}"
     else
-        doc_warn "$TOOL not found, needed by xapk-merger, apk-pull --merge, apk-patch" \
+        doc_warn "$TOOL not found, needed by $USERS" \
             "Install the SDK build-tools (Android Studio's SDK Manager, or sdkmanager 'build-tools;<version>')."
     fi
 done
@@ -41,7 +45,8 @@ doc_tool optional java "xapk-merger (APKEditor), apk-patch, apk-decompile (apkto
 doc_tool optional keytool "signing with a new debug keystore (comes with Java)" || true
 
 doc_section "Android: tools"
-doc_tool optional unzip "xapk-installer, xapk-merger" || true
+doc_tool optional unzip "xapk-installer, xapk-merger, apk-info" || true
+doc_tool optional sqlite3 "app-data --diff (database changes)" "It comes with the SDK platform-tools, or your package manager's sqlite3." || true
 if [ -n "${APKEDITOR_JAR:-}" ]; then
     if [ -f "$APKEDITOR_JAR" ]; then doc_ok "APKEditor $(re_tilde "$APKEDITOR_JAR") (APKEDITOR_JAR)"
     else doc_warn "APKEDITOR_JAR points to a missing file: $APKEDITOR_JAR"; fi

@@ -41,8 +41,7 @@ SERIAL=$(re_pick_device "launch-emulator-wireshark -s" "$SERIAL") || exit 1
 adb -s "$SERIAL" shell command -v tcpdump >/dev/null 2>&1 \
     || re_die "no tcpdump binary on $SERIAL (push a static arm64/x86_64 build to /system/bin or /data/local/tmp)."
 
-ROOT=$(re_root_mode --adb-root "$SERIAL") \
-    || re_die "no root on $SERIAL (needs an emulator with a Google APIs image, a userdebug build, or su)."
+ROOT=$(re_require_root "$SERIAL") || exit 1
 CAPTURE="tcpdump -i $IFACE -U -s 0 -w - 2>/dev/null"
 # exec-out, not re_root_shell: the pcap stream must reach Wireshark unaltered
 [ "$ROOT" = su ] && CAPTURE="su -c '$CAPTURE'"

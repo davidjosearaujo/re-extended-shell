@@ -1,7 +1,6 @@
 # shellcheck shell=bash
 # re-doctor checks of the binary module. Sourced by core/bin/re-doctor, which
 # provides the doc_* helpers. Read-only.
-# shellcheck disable=SC2154  # C_* come from bin/re-doctor
 
 # shellcheck source=lib.sh
 . "$RE_EXT_HOME/modules/binary/lib.sh"

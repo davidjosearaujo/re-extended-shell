@@ -170,10 +170,8 @@ else
     unzip -q "$INPUT_FILE" -d "$EXTRACT_DIR" ${UNZIP_ARGS[@]+"${UNZIP_ARGS[@]}"} || re_die "failed to extract archive."
 fi
 
-APK_FILES=()
-while IFS= read -r -d $'\0'; do
-    APK_FILES+=("$REPLY")
-done < <(find "$EXTRACT_DIR" -type f -name "*.apk" -print0)
+re_find_apks "$EXTRACT_DIR"
+APK_FILES=(${RE_APKS[@]+"${RE_APKS[@]}"})
 
 [ ${#APK_FILES[@]} -gt 0 ] || re_die "no APK files found in '$INPUT_FILE'."
 

@@ -66,6 +66,36 @@ case "$(uname -s)" in
         fi ;;
 esac
 
+# Mach-O on any system: a minimal header (file(1) reads its PIE flag), with
+# stand-ins for otool and nm that report a PIE, signed binary with a canary
+if [ "$(uname -s)" != Darwin ] || ! command -v otool >/dev/null 2>&1; then
+    MACHO="$T_DIR/macho"
+    mkdir -p "$MACHO/bin"
+    printf '\317\372\355\376\007\000\000\001\003\000\000\000\002\000\000\000\000\000\000\000\000\000\000\000\205\000\040\000\000\000\000\000' >"$MACHO/app"
+    head -c 64 /dev/zero >>"$MACHO/app"
+    cat >"$MACHO/bin/otool" <<'EOF'
+#!/bin/sh
+case "$1" in
+    -hv) printf 'Mach header\n      magic  cputype cpusubtype  caps    filetype ncmds sizeofcmds      flags\nMH_MAGIC_64   X86_64        ALL  0x00     EXECUTE     0          0   NOUNDEFS DYLDLINK TWOLEVEL PIE\n' ;;
+    -l)  printf 'Load command 0\n      cmd LC_CODE_SIGNATURE\n' ;;
+    -L)  printf '%s:\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)\n' "$2" ;;
+esac
+EOF
+    printf '#!/bin/sh\nprintf "___stack_chk_fail\\n_system\\n"\n' >"$MACHO/bin/nm"
+    chmod +x "$MACHO/bin/otool" "$MACHO/bin/nm"
+    if file -b "$MACHO/app" | grep -q Mach-O; then
+        PATH="$MACHO/bin:$PATH" run bin-triage "$MACHO/app"
+        expect_out "Hardening (Mach-O)" "Mach-O: has the hardening section"
+        expect_out "PIE          yes" "...reads PIE from the header"
+        expect_out "Canary       yes" "...the canary from the imports"
+        expect_out "Signed       yes" "...the signature from the load commands"
+        expect_out "libSystem.B.dylib" "...lists the libraries"
+        expect_out "  system" "...and notable imports"
+    else
+        skip "Mach-O" "this file(1) doesn't recognise Mach-O"
+    fi
+fi
+
 run bin-triage "$T_DIR/nope"
 expect_rc 1 "a missing file is an error"
 run bin-triage -n x "$T_DIR/sample.txt"

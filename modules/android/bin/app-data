@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+# Pull an app's private data (shared_prefs, databases, files) from a rooted device, and diff it.
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+usage() {
+    cat <<EOF
+Usage: app-data [-s SERIAL] [-o DIR] [-f] [--diff OLD_DIR] <PACKAGE>
+
+Copies an installed app's private storage off a rooted device or emulator, to
+see what it keeps and how: shared preferences, SQLite databases, files and
+caches. Then lists its preferences and databases, and the lines that look like
+tokens or passwords. With --diff, compares the copy with an earlier one and
+shows what changed, line by line for preferences and other text files and
+row by row for databases (needs sqlite3), so you can see what an action in
+the app writes.
+
+Output:
+  data/      /data/data/<PACKAGE>, its credential-encrypted storage
+  user_de/   /data/user_de/0/<PACKAGE>, its device-encrypted storage
+  external/  /sdcard/Android/data/<PACKAGE>, its external storage
+  Symbolic links (such as lib/) are left out. Only the first user's data.
+
+Options:
+  -s, --serial SERIAL  Device to pull from (optional with a single device)
+  -o, --output DIR     Output directory (default: ./<PACKAGE>-data/, or with
+                       --diff ./<PACKAGE>-data-<date>-<time>/)
+  -f, --force          Replace an existing output
+  --diff OLD_DIR       Show what changed since that earlier copy
+  -h, --help           Show this help
+
+Examples:
+  app-data com.example.app                  # copy it to ./com.example.app-data/
+  app-data --diff com.example.app-data com.example.app   # after logging in, say
+EOF
+}
+
+SERIAL="" OUTPUT="" FORCE="" OLD="" PACKAGE=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -s|--serial) re_need_arg "$1" "$#"; SERIAL="$2"; shift 2 ;;
+        -o|--output) re_need_arg "$1" "$#"; OUTPUT="$2"; shift 2 ;;
+        --diff)      re_need_arg "$1" "$#"; OLD="$2"; shift 2 ;;
+        -f|--force) FORCE=1; shift ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
+        *)
+            [ -z "$PACKAGE" ] || re_die "only one package at a time."
+            PACKAGE="$1"; shift ;;
+    esac
+done
+[ -n "$PACKAGE" ] || re_usage_error "missing <PACKAGE>."
+re_check_package_name "$PACKAGE"
+if [ -n "$OLD" ]; then
+    OLD=${OLD%/}
+    [ -d "$OLD/data" ] || [ -d "$OLD/user_de" ] || [ -d "$OLD/external" ] \
+        || re_die "$OLD is not an earlier app-data copy (no data/, user_de/ or external/ in it)."
+fi
+if [ -z "$OUTPUT" ]; then
+    OUTPUT="$PWD/$PACKAGE-data"
+    [ -z "$OLD" ] || OUTPUT="$OUTPUT-$(date +%Y%m%d-%H%M%S)"
+fi
+OUTPUT=${OUTPUT%/}
+re_refuse_existing "$FORCE" "$OUTPUT"
+if [ -n "$OLD" ] && [ "$(cd "$OLD" && pwd -P)" = "$(cd "$OUTPUT" 2>/dev/null && pwd -P)" ]; then
+    re_die "--diff and -o name the same directory."
+fi
+
+re_require adb
+SERIAL=$(re_pick_device "app-data -s" "$SERIAL") || exit 1
+re_require_package "$SERIAL" "$PACKAGE"
+MODE=$(re_require_root "$SERIAL") || exit 1
+
+# --- Copy on the device, then pull --------------------------------------------
+# The app's files are only readable as root: copy them, without symbolic
+# links, to a staging folder adb can pull from
+STAGE="$RE_DEVICE_DIR/app-data"
+WORK=$(mktemp -d)
+cleanup() {
+    rm -rf "$WORK"
+    re_root_shell "$SERIAL" "$MODE" "rm -rf $STAGE" >/dev/null 2>&1
+}
+trap cleanup EXIT
+
+echo "Copying the data of $PACKAGE on $SERIAL..."
+COPIED=$(re_root_shell "$SERIAL" "$MODE" "rm -rf $STAGE; mkdir -p $STAGE &&
+    for P in data:/data/data/$PACKAGE user_de:/data/user_de/0/$PACKAGE external:/storage/emulated/0/Android/data/$PACKAGE; do
+        [ -d \${P#*:} ] && cp -RP \${P#*:} $STAGE/\${P%%:*} && echo \${P%%:*};
+    done; find $STAGE -type l -exec rm -f {} + 2>/dev/null; chmod -R a+rX $STAGE" 2>/dev/null | tr -d '\r')
+[ -n "$COPIED" ] || re_die "found no data for $PACKAGE (has it been run yet?)."
+
+echo "Pulling $(echo "$COPIED" | tr '\n' ' ')..."
+adb -s "$SERIAL" pull "$STAGE" "$WORK/" >/dev/null || re_die "could not pull the data from $SERIAL."
+[ -d "$WORK/app-data" ] || re_die "could not pull the data from $SERIAL."
+rm -rf "$OUTPUT"
+mkdir -p "$(dirname -- "$OUTPUT")" || exit 1
+mv "$WORK/app-data" "$OUTPUT" || exit 1
+
+# --- What's in it ------------------------------------------------------------
+# Prints "PATH<tab>CHECKSUM SIZE" for every file under DIR, PATH relative to
+# it, sorted: one cksum run for the whole tree
+sums_of() {
+    (cd "$1" && find . -type f -exec cksum {} +) \
+        | awk '{ crc = $1; size = $2; sub(/^[^ ]+ [^ ]+ \.\//, ""); print $0 "\t" crc " " size }' | LC_ALL=C sort
+}
+is_sqlite() { [ "$(head -c 15 "$1" 2>/dev/null)" = "SQLite format 3" ]; }
+
+SUMS=$(sums_of "$OUTPUT")
+FILES=$(cut -f1 <<<"$SUMS")
+re_section "Contents"
+re_row Files "$(grep -c . <<<"$FILES")"
+re_row Size "$(du -sh "$OUTPUT" | awk '{ print $1 }')"
+echo " Preferences"
+grep '/shared_prefs/[^/]*\.xml$' <<<"$FILES" | re_list
+echo " Databases"
+# The header is read only for the files where apps keep databases: in a
+# databases/ folder or with a database extension (not each cached image)
+while IFS= read -r F; do
+    case "$F" in *-wal|*-shm|*-journal) continue ;; esac
+    case "$F" in */databases/*|*.db|*.db3|*.sqlite|*.sqlite3|*.sqlitedb) ;; *) continue ;; esac
+    is_sqlite "$OUTPUT/$F" && echo "$F"
+done <<<"$FILES" | re_list
+echo " Possible secrets (in text files)"
+(cd "$OUTPUT" && grep -rIniE '(pass(word|wd)?|secret|token|api[_-]?key|session|cookie|auth|bearer|private[_-]?key)' . 2>/dev/null) \
+    | sed 's#^\./##' | re_list
+
+# --- Changes since an earlier copy -------------------------------------------
+# Prints the dump of database FILE (and its -wal) read from a copy, so neither
+# copy is modified
+db_dump() {
+    local T
+    T=$(mktemp -d "$WORK/db.XXXXXX")
+    cp "$1" "$T/db" 2>/dev/null || return 0
+    [ ! -f "$1-wal" ] || cp "$1-wal" "$T/db-wal"
+    sqlite3 "$T/db" .dump 2>/dev/null
+}
+# Prints a unified diff of two files (or dumps) without its header, at most 60 lines
+show_diff() {
+    diff -u "$1" "$2" | tail -n +3 | awk '{ n++; if (n <= 60) print "      " substr($0, 1, 200) }
+        END { if (n > 60) print "      ... and " n - 60 " more lines" }'
+}
+
+if [ -n "$OLD" ]; then
+    # "+ PATH" added, "- PATH" removed, "~ PATH" changed, sorted by path
+    CHANGES=$(awk -F'\t' '
+        FNR == NR { old[$1] = $2; next }
+        !($1 in old) { print "+ " $1; next }
+        old[$1] != $2 { print "~ " $1 }
+        { delete old[$1] }
+        END { for (f in old) print "- " f }' <(sums_of "$OLD") - <<<"$SUMS" | LC_ALL=C sort -k2)
+    re_section "Changes since $OLD"
+    if [ -z "$CHANGES" ]; then
+        echo "  (none)"
+    else
+        sed 's/^/  /' <<<"$CHANGES"
+        echo
+        # The content: databases through their dump (a changed -wal counts as
+        # a change of its database), text files directly
+        HAVE_SQLITE=""; command -v sqlite3 >/dev/null 2>&1 && HAVE_SQLITE=1
+        SHOWN_DB=""
+        while IFS= read -r ENTRY; do
+            KIND=${ENTRY%% *} F=${ENTRY#* }
+            [ "$KIND" != "-" ] || continue
+            case "$F" in *-shm|*-journal) continue ;; *-wal) F=${F%-wal} ;; esac
+            NEW="$OUTPUT/$F" PREV="$OLD/$F"
+            [ -f "$NEW" ] || NEW=/dev/null
+            [ -f "$PREV" ] || PREV=/dev/null
+            if is_sqlite "$NEW" || is_sqlite "$PREV"; then
+                case "$SHOWN_DB" in *"|$F|"*) continue ;; esac
+                SHOWN_DB="$SHOWN_DB|$F|"
+                if [ -z "$HAVE_SQLITE" ]; then
+                    echo "  $F: database changed (install sqlite3 to see the rows)"; continue
+                fi
+                if [ "$PREV" = /dev/null ]; then : >"$WORK/old.sql"; else db_dump "$PREV" >"$WORK/old.sql"; fi
+                db_dump "$NEW" >"$WORK/new.sql"
+                if ! cmp -s "$WORK/old.sql" "$WORK/new.sql"; then
+                    echo "  $F (database)"
+                    show_diff "$WORK/old.sql" "$WORK/new.sql"
+                fi
+            elif grep -qI . "$NEW" 2>/dev/null; then
+                echo "  $F"
+                show_diff "$PREV" "$NEW"
+            fi
+        done <<<"$CHANGES"
+    fi
+fi
+
+echo
+echo "Saved to $OUTPUT/"

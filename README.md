@@ -162,6 +162,9 @@ Settings shared by every module (set them in `local/env.sh`, see [Configuration]
 | `apk-pull [-s SERIAL] <PKG>` | Pulls every APK of an installed app (base + splits) into `./<PKG>-splits/`. With `--merge`, saves a single installable `./<PKG>.apk` instead (merged with `xapk-merger` when the app has splits; `-k/-p/-a` sign it with your own keystore). `-o` sets the output, `-f` replaces an existing one. |
 | `apk-decompile <file.apk>` | Decompiles into `./<name>/jadx/` (Java, with [jadx](https://github.com/skylot/jadx)) and `./<name>/apktool/` (smali, manifest and resources, with [apktool](https://apktool.org)), running whichever is installed. |
 | `apk-patch <file.apk>` | For phones you can't root: makes the app trust user CAs and the ZAP CA (embedded in the APK), overriding `<pin-set>`s, allows cleartext, sets `debuggable`, then rebuilds and signs it. `-o` sets the output, `-f` replaces an existing one. |
+| `apk-info [-s SERIAL] <file.apk \| PKG>` | A static first look at an app, without decompiling it: the components other apps can reach and the permission guarding each (flagging those anyone can get), the URIs its deep links open, `debuggable`/`allowBackup`/cleartext, its network security config (cleartext, user CAs, pins, debug overrides), the permissions it asks for and declares, its signature (debug certificate, Janus), and its code (dex, native libraries, and whether it's Flutter, React Native, Xamarin, Unity, Cordova or Capacitor). Works on a file or on an installed app, by package name. `--all` lists the components that aren't exported too. |
+| `app-intent [-s SERIAL] <PKG> [COMPONENT]` | Without a component, lists the app's exported components, numbered. With one (number, full name or `.ShortName`), starts it as another app would: `am start` for an activity, `am startservice`, `am broadcast`, or `content query` on a provider. `--action`, `--data URI` and `-e KEY=VALUE` fill the intent, and arguments after `--` go to `am`/`content`. `--data` alone tries a deep link. It runs as the shell user even when adbd is root, so it's refused where another app would be; `--root` reaches the components that aren't exported. |
+| `app-data [-s SERIAL] [--diff DIR] <PKG>` | Copies the app's private storage off a rooted device (`/data/data`, device-encrypted storage, external storage) into `./<PKG>-data/`, then lists its preferences, databases and the lines that look like tokens or passwords. `--diff DIR` compares the copy with an earlier one: preferences and other text files line by line, databases row by row (with `sqlite3`), so you see what an action in the app writes. |
 | `applog [-s SERIAL] [--start] <PKG>` | `logcat` for that app's process only. Waits for it to start and follows it across restarts. `--start` (re)launches it; arguments after `--` go to logcat. |
 | `launch-emulator-wireshark [-s SERIAL] [-i IFACE]` | Streams `tcpdump` from the device into a local Wireshark window. |
 | `xapk-installer [-s SERIAL \| -n AVD] <file.xapk>` | Installs every split in an XAPK/ZIP bundle with `adb install-multiple` and pushes any OBB data. |
@@ -176,8 +179,11 @@ A typical session with an app that pins its certificates:
 ```sh
 launch-emulator Pixel_8_API_34          # CA injected, proxied through ZAP, frida-server pushed
 xapk-installer app.xapk                 # or install it from the Play Store
+apk-info com.example.app                # what it exposes, how it treats TLS
 frida-server --ssl-unpinning com.example.app
 applog com.example.app                  # in another terminal
+app-intent com.example.app              # its exported components; start one by number
+app-data com.example.app                # what it stores; later: app-data --diff com.example.app-data com.example.app
 apk-pull --merge com.example.app && apk-decompile com.example.app.apk
 ```
 
@@ -192,6 +198,9 @@ apk-pull --merge com.example.app && apk-decompile com.example.app.apk
   - `apk-decompile`: jadx and/or apktool. jadx has no `apt` package (brew,
     flatpak, a release binary or a manual build); if it isn't `jadx` on your
     PATH, point `JADX` (and `JADX_GUI`) at it, arguments included
+  - `apk-info`, `app-intent`: `aapt2` from the SDK build-tools (`apk-info` also uses
+    `apksigner` for the signature, and `unzip`)
+  - `app-data`: a rooted device or emulator; `sqlite3` (in platform-tools) to diff databases
   - `apk-patch`: apktool **2.9 or newer** (older ones, like many distributions ship,
     can't rebuild most current apps), Java and the SDK build-tools
   - `xapk-merger`, `apk-pull --merge`: Java and the SDK build-tools
@@ -396,6 +405,12 @@ manifests and the footer every command shares.
   line and a pointer to `--help`.
 - Progress lines end with `...`; the last line says what was done and where the result
   is (`Merged APK: ./app_merged.apk`). No message ends with `!`.
+- A command that prints a report uses `re_section "Title"`, `re_row Label value` and
+  `... | re_list [LIMIT]` (an indented list that ends with "... and N more"), so every
+  report has the same layout.
+- A command that needs root on a device gets it with `ROOT=$(re_require_root "$SERIAL") || exit 1`
+  and runs commands with `re_root_shell`. Commands that read an APK's manifest use
+  `re_manifest_records`; awk code that reads `aapt2` output starts with `"$RE_AWK_LIB"`.
 
 ## Notes
 

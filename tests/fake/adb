@@ -18,7 +18,14 @@ case "${1:-}" in
         [ -n "$STATE" ] || { echo "error: device '$SER' not found" >&2; exit 1; }
         echo "$STATE" ;;
     root) echo "restarting adbd as root" ;;
-    wait-for-device|connect|start-server|push|pull|install-multiple|reboot) ;;
+    wait-for-device|connect|start-server|push|install-multiple|reboot) ;;
+    pull)
+        # Files a test put under $FAKE_STATE/files/<remote path> come back,
+        # into an existing directory or as the named file, as adb does
+        SRC="$S/files$2" DEST="$3"
+        if [ -e "$SRC" ]; then
+            if [ -d "$DEST" ]; then cp -R "$SRC" "$DEST/"; else cp -R "$SRC" "$DEST"; fi
+        fi ;;
     reverse)
         shift
         case "${1:-}" in
@@ -50,6 +57,15 @@ case "${1:-}" in
             "getprop ro.product.model") printf 'FakePhone\r\n' ;;
             "getprop ro.product.cpu.abi") printf 'x86_64\r\n' ;;
             "id -u") printf '0\r\n' ;;
+            # app-intent's probe: FAKE_ADBD=shell (adbd isn't root), nosu (root,
+            # can't switch to the shell user), else root that can switch
+            *"su shell id -u"*)
+                case "${FAKE_ADBD:-}" in shell) echo shell ;; nosu) echo root ;; *) printf '2000\r\n' ;; esac ;;
+            # app-data's staging copy: the folders a test put in the staged tree
+            *"mkdir -p /data/local/tmp/re-ext/app-data"*)
+                for D in "$S/files/data/local/tmp/re-ext/app-data"/*/; do
+                    [ -d "$D" ] && D=${D%/} && printf '%s\r\n' "${D##*/}"
+                done ;;
             "settings get global http_proxy") if [ -f "$S/proxy.$SER" ]; then cat "$S/proxy.$SER"; else echo null; fi ;;
             "settings put global http_proxy "*) echo "${CMD##* }" >"$S/proxy.$SER" ;;
             "pm path "*) printf 'package:/data/app/fake/base.apk\r\n' ;;

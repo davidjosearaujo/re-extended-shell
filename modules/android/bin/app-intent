@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+# List an app's exported components, or start one with an intent, as another app would.
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+usage() {
+    cat <<EOF
+Usage: app-intent [-s SERIAL] [--all] <PACKAGE>
+       app-intent [-s SERIAL] [--root] [--action ACTION] [--data URI] [-e KEY=VALUE]... <PACKAGE> <COMPONENT> [-- ARGS...]
+       app-intent [-s SERIAL] [--action ACTION] --data URI <PACKAGE>
+
+With only a package, lists the components of an installed app that other apps
+can reach, numbered. With a component (its number, full name, or .ShortName),
+starts it the way its type needs: an activity with 'am start', a service with
+'am startservice', a receiver with 'am broadcast', and a provider with
+'content query' on its authority (or on --data). With --data and no
+component, sends a VIEW intent to the app, to try a deep link.
+
+Commands run as adb's shell user, like an app without special permissions,
+even when adbd runs as root (as after launch-emulator). The shell user does
+hold a few permissions an ordinary app doesn't.
+
+Options:
+  -s, --serial SERIAL    Device to use (optional with a single device)
+  --all                  Also list the components that aren't exported
+  --root                 Run as root, which also reaches components that aren't
+                         exported
+  --action ACTION        Intent action (default with --data and no component:
+                         android.intent.action.VIEW)
+  --data URI             Intent data URI, or for a provider the content:// URI
+                         to query
+  -e, --extra KEY=VALUE  String extra, repeatable. Other types go after --,
+                         e.g. -- --ei count 3 --ez flag true
+  -h, --help             Show this help
+
+Examples:
+  app-intent com.example.app                       # what can be reached
+  app-intent com.example.app 4 -e url=https://example.org
+  app-intent com.example.app --data 'example://open?id=1'
+  app-intent com.example.app .DataProvider -- --projection name
+EOF
+}
+
+SERIAL="" ALL="" ROOT="" ACTION="" DATA="" PACKAGE="" COMPONENT="" EXTRAS=() PASS=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -s|--serial) re_need_arg "$1" "$#"; SERIAL="$2"; shift 2 ;;
+        --action)    re_need_arg "$1" "$#"; ACTION="$2"; shift 2 ;;
+        --data)      re_need_arg "$1" "$#"; DATA="$2"; shift 2 ;;
+        -e|--extra)
+            re_need_arg "$1" "$#"
+            case "$2" in ?*=*) ;; *) re_die "$1 takes KEY=VALUE, got: $2" ;; esac
+            EXTRAS+=("$2"); shift 2 ;;
+        --all)  ALL=1; shift ;;
+        --root) ROOT=1; shift ;;
+        -h|--help) re_help; exit 0 ;;
+        --) shift; PASS+=("$@"); break ;;
+        -*) re_unknown_option "$1" ;;
+        *)
+            if [ -z "$PACKAGE" ]; then PACKAGE="$1"
+            elif [ -z "$COMPONENT" ]; then COMPONENT="$1"
+            else re_unexpected_arg "$1" "one package and one component; am arguments go after --"
+            fi
+            shift ;;
+    esac
+done
+[ -n "$PACKAGE" ] || re_usage_error "missing <PACKAGE>."
+re_check_package_name "$PACKAGE"
+LISTING=""
+[ -n "$COMPONENT$DATA$ACTION" ] || LISTING=1
+if [ -n "$LISTING" ] && [ $(( ${#EXTRAS[@]} + ${#PASS[@]} )) -gt 0 ]; then
+    re_die "-e and -- arguments need a component (or --data) to send to."
+fi
+[ -z "$LISTING" ] || [ -z "$ROOT" ] || re_die "--root needs a component to start."
+[ -n "$LISTING" ] || [ -z "$ALL" ] || re_die "--all only applies to the listing."
+
+re_require adb
+SERIAL=$(re_pick_device "app-intent -s" "$SERIAL") || exit 1
+ADB=(adb -s "$SERIAL")
+
+# Appends arguments to CMD, single-quoted for the device shell
+QUOTE="'\\''"
+arg() {
+    local A
+    for A in "$@"; do CMD="$CMD '${A//\'/$QUOTE}'"; done
+}
+
+# --- The components, from the app's manifest ---------------------------------
+COMPONENTS=""
+if [ -n "$LISTING" ] || [ -n "$COMPONENT" ]; then
+    re_require_aapt2
+    WORK=$(mktemp -d)
+    trap 'rm -rf "$WORK"' EXIT
+    re_pull_base_apk "$SERIAL" "$PACKAGE" "$WORK/base.apk"
+    RECORDS=$(re_apk_xmltree "$WORK/base.apk" | re_manifest_records)
+    COMPONENTS=$(grep '^component|' <<<"$RECORDS")
+fi
+
+if [ -n "$LISTING" ]; then
+    awk -F'|' -v pkg="$PACKAGE" -v all="$ALL" "$RE_AWK_LIB"'
+        all == "" && $5 == "no" { next }
+        {
+            info = ($5 == "no" ? "not exported" : "")
+            perms = $6 " " $7 " " $8; gsub(/^ +| +$/, "", perms); gsub(/  +/, " ", perms)
+            if (perms != "") info = info (info == "" ? "" : ", ") "needs " perms
+            if ($12 != "") info = info (info == "" ? "" : ", ") "launcher"
+            if (!n++) print (all != "" ? "All" : "Exported") " components of " pkg ":"
+            printf "  %-3s %-14s %s%s\n", $2, $3, short($4), (info != "" ? "  (" info ")" : "")
+            if ($9 != "") { a = $9; gsub(/;/, " content://", a); printf "      content://%s\n", a }
+            if ($10 != "" && $10 != "android.intent.action.MAIN") printf "      actions: %s\n", $10
+            if ($11 != "") printf "      links: %s\n", $11
+        }
+        END {
+            if (n) { print "Start one with: app-intent " pkg " <N> [--action ACTION] [--data URI] [-e KEY=VALUE]"; exit }
+            print pkg " has no exported components."
+            if (all == "") print "List the others with: app-intent --all " pkg
+        }' <<<"$COMPONENTS"
+    exit 0
+fi
+
+# --- The component to start --------------------------------------------------
+TYPE="activity" NAME="" EXPORTED="" AUTH=""
+if [ -n "$COMPONENT" ]; then
+    # By number, full name (also PACKAGE/.Name or .Name), else a unique class
+    # name (Main for com.example.ui.Main)
+    WANT=${COMPONENT#"$PACKAGE"/}
+    case "$WANT" in .*) WANT="$PACKAGE$WANT" ;; esac
+    MATCH=$(awk -F'|' -v w="$WANT" '
+        { c = $4; sub(/.*\./, "", c) }
+        w ~ /^[0-9]+$/ { if ($2 == w) print; next }
+        $4 == w { exact = $0 }
+        c == w { cls[++n] = $0 }
+        END { if (exact != "") print exact; else for (i = 1; i <= n; i++) print cls[i] }' <<<"$COMPONENTS")
+    if [ -z "$MATCH" ]; then
+        re_die "no component '$COMPONENT' in $PACKAGE (list them with: app-intent --all $PACKAGE)"
+    elif [ "$(grep -c . <<<"$MATCH")" -gt 1 ]; then
+        echo "Error: '$COMPONENT' matches several components, use its number or full name:" >&2
+        awk -F'|' '{ printf "  %-3s %-14s %s\n", $2, $3, $4 }' <<<"$MATCH" >&2
+        exit 1
+    fi
+    IFS='|' read -r _ _ TYPE NAME EXPORTED PERM RPERM WPERM AUTH _ <<<"$MATCH"
+    if [ "$EXPORTED" = no ] && [ -z "$ROOT" ]; then
+        re_warn "${NAME#"$PACKAGE"} is not exported, so this should be refused (add --root to start it anyway)."
+    fi
+    PERMS="$PERM${RPERM:+ $RPERM}${WPERM:+ $WPERM}"
+    PERMS=${PERMS# }
+    if [ -n "$PERMS" ] && [ -z "$ROOT" ]; then
+        case "$TYPE" in
+            receiver) echo "Note: it needs $PERMS. Without it the broadcast is dropped, silently ('Broadcast completed' either way)." >&2 ;;
+            *) echo "Note: it needs $PERMS, the shell user may not have it." >&2 ;;
+        esac
+    fi
+    if [ "$TYPE" = provider ] && [ "${#EXTRAS[@]}" -gt 0 ]; then
+        re_die "-e doesn't apply to a provider; pass content options after --, e.g. -- --where \"id=1\""
+    fi
+fi
+
+# --- The command -------------------------------------------------------------
+CMD=""
+case "$TYPE" in
+    provider)
+        CMD="content query --uri"
+        arg "${DATA:-content://${AUTH%%;*}/}" ;;
+    *)
+        case "$TYPE" in
+            service)  CMD="am startservice" ;;
+            receiver) CMD="am broadcast" ;;
+            *)        CMD="am start -W" ;;
+        esac
+        if [ -n "$NAME" ]; then
+            CMD="$CMD -n"; arg "$PACKAGE/$NAME"
+        else
+            CMD="$CMD -p"; arg "$PACKAGE"
+            [ -n "$ACTION" ] || ACTION=android.intent.action.VIEW
+        fi
+        [ -z "$ACTION" ] || { CMD="$CMD -a"; arg "$ACTION"; }
+        [ -z "$DATA" ] || { CMD="$CMD -d"; arg "$DATA"; }
+        for KV in ${EXTRAS[@]+"${EXTRAS[@]}"}; do
+            CMD="$CMD --es"; arg "${KV%%=*}" "${KV#*=}"
+        done ;;
+esac
+arg ${PASS[@]+"${PASS[@]}"}
+
+# Runs a command on the device, without the Java stack trace of a refusal
+on_device() {
+    "${ADB[@]}" shell "$1" 2>&1 | tr -d '\r' | grep -v '^[[:space:]]*at [a-zA-Z]'
+    return "${PIPESTATUS[0]}"
+}
+
+# As whom: the shell user unless --root. One round trip says whether adbd is
+# root and, if so, whether it can switch to the shell user (su of userdebug
+# builds and emulators); su isn't tried otherwise, so Magisk never prompts.
+if [ -n "$ROOT" ]; then
+    MODE=$(re_require_root "$SERIAL") || exit 1
+    echo "As root: $CMD" >&2
+    if [ "$MODE" = su ]; then
+        on_device "su -c \"$(printf '%s' "$CMD" | sed 's/[\\"$`]/\\&/g')\""
+    else
+        on_device "$CMD"
+    fi
+else
+    # shellcheck disable=SC2016  # expanded on the device
+    case "$("${ADB[@]}" shell 'if [ "$(id -u)" = 0 ]; then su shell id -u 2>/dev/null || echo root; else echo shell; fi' 2>/dev/null | tr -d '\r')" in
+        shell) echo "As the shell user: $CMD" >&2; on_device "$CMD" ;;
+        2000)  echo "As the shell user: $CMD" >&2; on_device "su shell $CMD" ;;
+        *)
+            re_warn "adbd runs as root and can't switch to the shell user, so this runs as root: components that aren't exported start too."
+            on_device "$CMD" ;;
+    esac
+fi
