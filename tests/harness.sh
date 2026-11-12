@@ -23,7 +23,16 @@ fake_reset() {
     rm -rf "$FAKE_STATE" "$ANDROID_AVD_HOME"
     mkdir -p "$FAKE_STATE" "$ANDROID_AVD_HOME"
     : >"$FAKE_STATE/devices"
+    : >"$FAKE_STATE/procs"
     : >"$FAKE_STATE/log"
+}
+
+# fake_emulator_process PID AVD_NAME: an emulator process for the fake pgrep
+# to find. The PID is made up, so only use this for paths that stop before
+# 'kill': one that signalled it would hit whatever really holds that PID.
+fake_emulator_process() {
+    echo "$1|/opt/android/emulator/qemu/linux-x86_64/qemu-system-x86_64 -avd $2 -port 5554 -netdelay none" \
+        >>"$FAKE_STATE/procs"
 }
 
 # fake_emulator SERIAL AVD_NAME [SNAPSHOT...]: a running emulator whose AVD has these snapshots

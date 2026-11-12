@@ -104,7 +104,10 @@ Every command works the same way, so once you know one you know them all:
 - `<command> --help` shows its usage, options, the settings it reads (with their
   current value) and examples. `re-extended-shell --commands` lists every command.
 - A device is picked with `-s SERIAL` and a running emulator with `-n AVD_NAME`; with a
-  single device connected, neither is needed.
+  single device connected, neither is needed. A running emulator answers to both, so
+  either flag takes either identifier and `-s` accepts an AVD name; what can only be an
+  emulator (snapshots, `kill-emulator`) says so when given a phone, instead of failing
+  obscurely.
 - `-o` sets where output goes, and nothing is overwritten without `-f`.
 - Errors start with `Error:`, warnings with `Warning:`, and both go to stderr. A
   mistyped option says so and points to `--help`.
@@ -193,8 +196,8 @@ still work when the new ones aren't set.
 | `launch-emulator --proxy PORT --ca FILE <AVD>` | Also injects `FILE` (your proxy's root CA, PEM or DER) as a system CA and sets the global HTTP proxy to `PORT` on this machine, e.g. `--proxy 8080 --ca ~/burp-ca.der` for Burp. The two go together. |
 | `launch-emulator -d [-s SERIAL]` | The same on a physical device, with `--proxy`/`--ca` and the frida-server flags (those need root: a userdebug build, or `su` via Magisk/KernelSU). `-s` picks the phone when several are connected (and implies `-d`); an `emulator-NNNN` serial there stands for the AVD that emulator runs, so it stays on the emulator path. Routes the proxy through `adb reverse`, and opens [scrcpy](https://github.com/Genymobile/scrcpy). |
 | `release-device [-s SERIAL] [--reboot]` | Undoes `launch-emulator -d`: clears the proxy and the `adb reverse` tunnel it goes through (other tunnels are left alone), stops frida-server, deletes the pushed files and closes scrcpy. Run it before unplugging a phone that has a proxy set, or its network stops working. |
-| `kill-emulator [-f] <AVD>` | Shuts an emulator down cleanly by AVD name, killing it only if it won't exit. |
-| `reset-emulator [-s SERIAL \| -n AVD]` | Puts a running emulator back to its `re-ready` snapshot (the one `launch-emulator --snapshot` saves) without restarting it (a few seconds), dropping everything since: installed apps, app data, the proxy and CA `launch-emulator --proxy --ca` set up. With one emulator running it's picked automatically; with several, name it with `-s` (serial) or `-n` (AVD name). |
+| `kill-emulator [-f] <AVD\|SERIAL>` | Shuts an emulator down cleanly, by AVD name or by its `emulator-NNNN` serial, killing it only if it won't exit. |
+| `reset-emulator [-s SERIAL \| -n AVD]` | Puts a running emulator back to its `re-ready` snapshot (the one `launch-emulator --snapshot` saves) without restarting it (a few seconds), dropping everything since: installed apps, app data, the proxy and CA `launch-emulator --proxy --ca` set up. With one emulator running it's picked automatically; with several, name it with `-s` (serial) or `-n` (AVD name) — either flag takes either identifier. |
 | `reset-emulator --save [-s SERIAL \| -n AVD]` | Saves the emulator's current state as the snapshot instead, so you can set up the app under test once and come back to it. `--snapshot NAME` (on either form) uses another snapshot, so you can keep several states. `--save` alone replaces the `re-ready` one that `launch-emulator --snapshot` boots from. |
 | `device-proxy [-s SERIAL] on\|off\|status` | Points the global HTTP proxy at your proxy's port (`RE_PROXY_PORT`), or turns it off, on a running emulator or device without restarting it (for a physical device, the `adb reverse` tunnel too). `off` clears any global HTTP proxy. `release-device` does the same and more when you unplug a phone. |
 | `frida-server [-s SERIAL]` | Downloads the frida-server build that matches your `frida --version` and the device's CPU, pushes it and starts it as root. Does nothing if that version already runs. `--push-only` stops after the push, `--stop` kills it, `--refresh` downloads again. |

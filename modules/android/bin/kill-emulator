@@ -10,10 +10,11 @@ done
 
 usage() {
     cat <<EOF
-Usage: kill-emulator [-f] <AVD_NAME>
+Usage: kill-emulator [-f] <AVD_NAME|SERIAL>
 
 Asks the emulator to shut down cleanly (adb emu kill). If it can't be reached
 over adb, or doesn't exit within 15s, its process is terminated instead.
+The emulator is named by its AVD name or by its 'emulator-NNNN' adb serial.
 
 Options:
   -f, --force  Skip the clean shutdown and kill the process right away (SIGKILL)
@@ -47,36 +48,96 @@ if [ -z "$AVD_NAME" ]; then
 $(sed 's/^/  /' <<<"$RUNNING")}"
 fi
 
-PIDS=$(emulator_pids "$AVD_NAME")
-SERIAL=$(re_emulator_serial "$AVD_NAME")
+# The argument names one running emulator either way round: its AVD name or
+# its 'emulator-NNNN' serial. An emulator whose console is unreachable has no
+# AVD name over adb ('?'), and one that adb doesn't know at all has no serial:
+# either identifier alone is enough to shut it down.
+TARGET="$AVD_NAME"
+SERIAL="" AVD_NAME=""
+# --read-only lets several emulators run one AVD, and then its name doesn't
+# say which one to stop (nor do their processes: only adb tells them apart)
+case "$TARGET" in
+    emulator-*) ;;
+    *)  DUPS=$(re_running_emulators | awk -v n="$TARGET" '$2 == n')
+        if [ -n "$DUPS" ] && [ "$(wc -l <<<"$DUPS")" -gt 1 ]; then
+            echo "Error: several emulators run $TARGET, so its name isn't enough: name the one to stop by its serial." >&2
+            sed 's/^/  /' <<<"$DUPS" >&2
+            exit 1
+        fi ;;
+esac
+if LINE=$(re_match_emulator "$TARGET"); then
+    SERIAL=${LINE%% *}
+    NAME=${LINE#* }
+    [ "$NAME" = "?" ] || AVD_NAME="$NAME"
+else
+    # Not in adb's list: still try the process, unless what we have is a serial
+    case "$TARGET" in emulator-*) ;; *) AVD_NAME="$TARGET" ;; esac
+fi
+LABEL=${AVD_NAME:-${SERIAL:-$TARGET}}
 
-if [ -z "$PIDS" ] && [ -z "$SERIAL" ]; then
-    re_die "no running emulator found with the name: $AVD_NAME"
+PIDS=""
+[ -z "$AVD_NAME" ] || PIDS=$(emulator_pids "$AVD_NAME")
+
+# Their processes carry only the AVD name, so with several of them a kill by
+# name would take down an emulator nobody named: go through adb instead
+AMBIGUOUS=""
+if [ -n "$PIDS" ] && [ "$(wc -l <<<"$PIDS")" -gt 1 ]; then
+    [ -n "$SERIAL" ] || re_die "several processes run $TARGET and adb knows none of them: stop them by hand (see 'pgrep -af qemu-system')."
+    AMBIGUOUS=1
+    AVD_NAME=""   # the process list can't say which of them is $SERIAL
+    PIDS=""
 fi
 
+if [ -z "$PIDS" ] && [ -z "$SERIAL" ]; then
+    echo "Error: no running emulator found: $TARGET" >&2
+    if re_avd_dir "$TARGET" >/dev/null; then
+        echo "That AVD exists but isn't running." >&2
+    elif [ "$(adb -s "$TARGET" get-state 2>/dev/null)" = "device" ]; then
+        echo "$TARGET is a connected device, not an emulator (unplug it, or: release-device -s $TARGET)." >&2
+    fi
+    RUNNING=$(re_running_emulators)
+    [ -z "$RUNNING" ] || { echo "Running emulators:" >&2; sed 's/^/  /' <<<"$RUNNING" >&2; }
+    exit 1
+fi
+
+# True while the emulator is still up: its process if we can name the AVD,
+# otherwise its presence in adb's device list
+still_up() {
+    if [ -n "$AVD_NAME" ]; then
+        [ -n "$(emulator_pids "$AVD_NAME")" ]
+    else
+        [ "$(adb -s "$SERIAL" get-state 2>/dev/null)" = "device" ]
+    fi
+}
+
 if [ -n "$FORCE" ]; then
-    [ -n "$PIDS" ] || re_die "found $AVD_NAME on $SERIAL over adb but not its process, try without --force."
-    echo "Force killing emulator: $AVD_NAME (PID: ${PIDS//$'\n'/ })"
+    [ -z "$AMBIGUOUS" ] || re_die "several emulators run $LABEL and only adb can tell them apart, so --force can't pick $SERIAL's process: stop it without --force."
+    [ -n "$PIDS" ] || re_die "found $LABEL on $SERIAL over adb but not its process, try without --force."
+    echo "Force killing emulator: $LABEL (PID: ${PIDS//$'\n'/ })"
     # shellcheck disable=SC2086
     kill -9 $PIDS
     exit 0
 fi
 
 if [ -n "$SERIAL" ]; then
-    echo "Shutting down emulator: $AVD_NAME ($SERIAL)"
+    echo "Shutting down emulator: $LABEL ($SERIAL)"
     adb -s "$SERIAL" emu kill >/dev/null 2>&1
 else
-    echo "Emulator $AVD_NAME is not reachable over adb, terminating it (PID: ${PIDS//$'\n'/ })"
+    echo "Emulator $LABEL is not reachable over adb, terminating it (PID: ${PIDS//$'\n'/ })"
     # shellcheck disable=SC2086
     kill $PIDS
 fi
 
 for _ in $(seq 1 15); do
-    [ -z "$(emulator_pids "$AVD_NAME")" ] && { echo "Emulator $AVD_NAME stopped."; exit 0; }
+    still_up || { echo "Emulator $LABEL stopped."; exit 0; }
     sleep 1
 done
 
-PIDS=$(emulator_pids "$AVD_NAME")
+PIDS=""
+[ -z "$AVD_NAME" ] || PIDS=$(emulator_pids "$AVD_NAME")
+if [ -z "$PIDS" ]; then
+    re_die "$LABEL didn't shut down within 15s and its process can't be found; kill it by hand."
+fi
 echo "Emulator didn't exit within 15s, killing it (PID: ${PIDS//$'\n'/ })"
 # shellcheck disable=SC2086
 kill -9 $PIDS

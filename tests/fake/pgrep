@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Fake pgrep for ./test. Processes come from $FAKE_STATE/procs (lines
+# PID|COMMAND LINE), put there by fake_emulator_process; every call is logged.
+# Only the '-f [--] PATTERN' form the commands use is supported.
+S="${FAKE_STATE:?FAKE_STATE not set}"
+echo "pgrep $*" >>"$S/log"
+
+FULL=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -f) FULL=1; shift ;;
+        --) shift; break ;;
+        -*) shift ;;
+        *)  break ;;
+    esac
+done
+PAT="${1:-}"
+[ -n "$FULL" ] || { echo "fake pgrep: only -f is supported" >&2; exit 2; }
+[ -n "$PAT" ] || { echo "fake pgrep: no pattern" >&2; exit 2; }
+[ -s "$S/procs" ] || exit 1
+
+# awk matches with an ERE, as 'pgrep -f' does
+OUT=$(awk -F'|' -v p="$PAT" '$2 ~ p { print $1 }' "$S/procs")
+[ -n "$OUT" ] || exit 1
+echo "$OUT"

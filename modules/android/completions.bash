@@ -59,7 +59,9 @@ _re_complete_kill_emulator() {
     if [[ "$cur" == -* ]]; then
         _re_reply_words "-f --force -h --help"
     else
-        _re_reply_words "$(_re_avds)"
+        # An AVD name or a running emulator's serial, both of which it takes
+        _re_reply_words "$(_re_avds)
+$(_re_serials | grep '^emulator-')"
     fi
 }
 

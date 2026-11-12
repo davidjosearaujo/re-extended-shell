@@ -55,12 +55,14 @@ fi
 
 re_require unzip adb
 
-# If an AVD name was provided, resolve it to a serial number
+# If an AVD name was provided, resolve it to a serial number (an emulator
+# serial names the same emulator, so -n takes that too)
 if [ -n "$TARGET_AVD" ]; then
     echo "Looking for the emulator running $TARGET_AVD..."
-    DEVICE_SERIAL=$(re_emulator_serial "$TARGET_AVD")
-    [ -n "$DEVICE_SERIAL" ] || re_die "could not find a running emulator with AVD name '$TARGET_AVD'."
-    echo "Found $TARGET_AVD on $DEVICE_SERIAL."
+    LINE=$(re_match_emulator "$TARGET_AVD") \
+        || re_die "could not find a running emulator with AVD name '$TARGET_AVD'."
+    DEVICE_SERIAL=${LINE%% *}
+    echo "Found ${LINE#* } on $DEVICE_SERIAL."
 fi
 
 # Check the device is available (or that exactly one is connected)
