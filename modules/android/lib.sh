@@ -181,6 +181,15 @@ re_pick_device() {
                 return 1 ;;
         esac
     fi
+    # A serial given by hand has to match the filter too, or an emulator ends
+    # up being treated (and reported) as a phone
+    if [ -n "$FILTER" ]; then
+        case "$SERIAL" in
+            emulator-*)
+                echo "Error: $SERIAL is an emulator, and ${CALLER%% *} only works on a physical device." >&2
+                return 1 ;;
+        esac
+    fi
     if [ "$(adb -s "$SERIAL" get-state 2>/dev/null)" != "device" ]; then
         echo "Error: device '$SERIAL' is not connected or not authorised (see 'adb devices')." >&2
         return 1
