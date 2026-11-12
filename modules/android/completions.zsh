@@ -39,7 +39,7 @@ _re_launch_emulator() {
         '--proxy[proxy the traffic to this port on this machine (needs --ca)]:port' \
         '--ca[inject this CA as a system CA (needs --proxy)]:certificate:_files' \
         '(--snapshot --clean --read-only 1)'{-d,--device}'[use a connected physical device]' \
-        '(--snapshot --clean --read-only -s --serial 1)'{-s,--serial}'[physical device to use (implies -d)]:device serial:_re_serials --physical' \
+        '(--snapshot --clean --read-only -s --serial 1)'{-s,--serial}'[device to use: a phone (implies -d) or a running emulator]:device serial:_re_serials' \
         '1:AVD name:_re_avds'
 }
 

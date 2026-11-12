@@ -42,7 +42,8 @@ _re_packages() {
 _re_complete_launch_emulator() {
     local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
     case "$prev" in
-        -s|--serial) _re_reply_words "$(_re_serials --physical)"; return ;;
+        # -s takes a phone or the serial of a running emulator (its AVD)
+        -s|--serial) _re_reply_words "$(_re_serials)"; return ;;
         --proxy) return ;;
         --ca) _re_reply_files "cer|crt|pem|der"; return ;;
     esac
