@@ -24,7 +24,8 @@ the app under test once, then come back to that state with every reset.
 Options:
   -s, --serial SERIAL  Emulator to use, by adb serial (optional with a single
                        emulator)
-  -n, --name AVD_NAME  Emulator to use, by AVD name
+  -n, --name AVD_NAME  Emulator to use, by AVD name. Either flag takes either
+                       identifier: both name one running emulator
   --save               Save the current state as the snapshot, replacing it
   --snapshot NAME      Snapshot to use (default: '$RE_EMULATOR_SNAPSHOT', the one
                        'launch-emulator --snapshot' boots from, so --save without --snapshot
@@ -33,14 +34,13 @@ Options:
 EOF
 }
 
-TARGET="" FIELD="" SNAP="$RE_EMULATOR_SNAPSHOT" SAVE=""
+TARGET="" SNAP="$RE_EMULATOR_SNAPSHOT" SAVE=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -h|--help) re_help; exit 0 ;;
         -s|--serial|-n|--name)
             re_need_arg "$1" "$#"
             [ -z "$TARGET" ] || re_die "pass only one of -s SERIAL or -n AVD_NAME."
-            case "$1" in -s|--serial) FIELD=1 ;; *) FIELD=2 ;; esac
             TARGET="$2"; shift 2 ;;
         --save) SAVE=1; shift ;;
         --snapshot) re_need_arg "$1" "$#"; SNAP="$2"; shift 2 ;;
@@ -65,9 +65,15 @@ if [ -z "$TARGET" ]; then
     fi
     LINE=$RUNNING
 else
-    LINE=$(awk -v t="$TARGET" -v f="$FIELD" '$f == t { print; exit }' <<<"$RUNNING")
-    if [ -z "$LINE" ]; then
-        echo "Error: no running emulator matches '$TARGET'. Running emulators:" >&2
+    # Either flag takes either identifier: both name one running emulator
+    if ! LINE=$(re_match_emulator "$TARGET"); then
+        echo "Error: no running emulator matches '$TARGET'." >&2
+        if re_avd_dir "$TARGET" >/dev/null; then
+            echo "That AVD isn't running. Start it with: launch-emulator --snapshot $TARGET" >&2
+        elif [ "$(adb -s "$TARGET" get-state 2>/dev/null)" = "device" ]; then
+            echo "$TARGET is a connected device, not an emulator, and only an emulator has snapshots." >&2
+        fi
+        echo "Running emulators:" >&2
         sed 's/^/  /' <<<"$RUNNING" >&2
         exit 1
     fi

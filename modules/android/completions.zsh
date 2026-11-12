@@ -17,6 +17,15 @@ _re_serials() {
     _describe -t serials 'device serial' serials
 }
 
+# An AVD name or a running emulator's serial: kill-emulator takes either
+_re_avd_or_emulator() {
+    local -a serials
+    _re_avds
+    (( $+commands[adb] )) || return
+    serials=( ${(f)"$(adb devices 2>/dev/null | awk 'NR > 1 && $2 == "device" && $1 ~ /^emulator-/ { print $1 }')"} )
+    _describe -t serials 'emulator serial' serials
+}
+
 # Packages installed on the device given with -s (or the only one connected).
 # Called from _arguments, which fills $opt_args.
 _re_packages() {
@@ -47,7 +56,7 @@ _re_kill_emulator() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
         '(-f --force)'{-f,--force}'[kill the process right away]' \
-        '1:AVD name:_re_avds'
+        '1:AVD name or emulator serial:_re_avd_or_emulator'
 }
 
 _re_device_proxy() {

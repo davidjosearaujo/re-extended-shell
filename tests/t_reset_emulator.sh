@@ -23,7 +23,8 @@ expect_log "-s emulator-5556 emu avd snapshot load" "loads on the named emulator
 run reset-emulator -s emulator-5554
 expect_log "-s emulator-5554 emu avd snapshot load" "target by serial (-s)"
 run reset-emulator -s TestAvd_B
-expect_rc 1 "-s does not match an AVD name"
+expect_rc 0 "-s takes an AVD name too: either flag takes either identifier"
+expect_log "-s emulator-5556 emu avd snapshot load" "...resolved to that emulator"
 run reset-emulator -n nope
 expect_rc 1 "unknown target is an error"
 expect_out "no running emulator matches 'nope'" "unknown target is named"

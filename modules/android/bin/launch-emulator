@@ -34,9 +34,10 @@ Options:
                         system CA; needs --proxy
   -d, --device          Use a connected physical device instead of an emulator
                         (rooted, for --ca and frida-server), mirrored with scrcpy
-  -s, --serial SERIAL   Device to use: a physical device (implies -d; optional
-                        with a single device), or the 'emulator-NNNN' serial of
-                        a running emulator, which stands for its AVD
+  -s, --serial SERIAL   Target to use: a physical device (implies -d; optional
+                        with a single device), or a running emulator's
+                        'emulator-NNNN' serial, or an AVD name (both of those
+                        mean that AVD, so they stay on the emulator path)
   -h, --help            Show this help
 
 Root ('adb root', or su on a phone) is only taken when a flag needs it.
@@ -81,13 +82,24 @@ if [ -n "$SNAP_ARG" ]; then
     if [ -n "$AVD_NAME" ] || [ -n "$DEVICE" ]; then SNAP="$SNAP_ARG"; else AVD_NAME="$SNAP_ARG"; fi
 fi
 case "$SNAP" in */*|.|..) re_die "--snapshot: '$SNAP' isn't a valid snapshot name." ;; esac
+re_require adb
+# An emulator serial where the AVD name goes means the same as -s
+case "$AVD_NAME" in
+    emulator-*) [ -n "$SERIAL" ] || { SERIAL="$AVD_NAME"; AVD_NAME="" ; } ;;
+esac
 # -s names a target, and only a phone needs the -d path: an 'emulator-NNNN'
 # serial stands for the AVD that emulator runs, not for a physical device
+if [ -n "$SERIAL" ] && [ -z "$AVD_NAME" ] && [ "$(adb -s "$SERIAL" get-state 2>/dev/null)" != "device" ] \
+   && re_avd_dir "$SERIAL" >/dev/null; then
+    # An AVD name after -s: that AVD is the target (a connected device of that
+    # name would have won above)
+    [ -z "$DEVICE_FLAG" ] || re_die "'$SERIAL' is an AVD name, not a physical device: drop -d to start that emulator."
+    AVD_NAME="$SERIAL"; SERIAL=""; DEVICE=""
+fi
 case "$SERIAL" in
     emulator-*)
         [ -z "$DEVICE_FLAG" ] || re_die "$SERIAL is an emulator, so -d doesn't apply to it (-d is for a physical device): drop -d."
         [ -z "$AVD_NAME" ] || re_die "pass either an AVD name or -s SERIAL, not both ($SERIAL already names a running emulator)."
-        re_require adb
         RUNNING_EMUS=$(re_running_emulators)
         EMU_AVD=$(awk -v s="$SERIAL" '$1 == s { sub(/^[^ ]+ /, ""); print; exit }' <<<"$RUNNING_EMUS")
         if [ -z "$EMU_AVD" ]; then
@@ -134,10 +146,6 @@ fi
 # snapshot), clean (wiped boot, then save it). Only --clean ever wipes.
 SAVE=""   # set when a snapshot gets saved (create, clean)
 if [ -n "$DEVICE" ]; then
-    # An AVD name after -s is a common slip: say so instead of 'not connected'
-    if [ -n "$SERIAL" ] && [ "$(adb -s "$SERIAL" get-state 2>/dev/null)" != "device" ] && re_avd_dir "$SERIAL" >/dev/null; then
-        re_die "'$SERIAL' is an AVD name, not a device serial. Start that emulator with: launch-emulator $SERIAL"
-    fi
     SERIAL=$(re_pick_device --physical "launch-emulator -d -s" "$SERIAL") || exit 1
     MODE="device"
     MODEL=$(adb -s "$SERIAL" shell getprop ro.product.model 2>/dev/null | tr -d '\r')
@@ -154,7 +162,12 @@ $(sed 's/^/  /' <<<"$AVDS")}${AVDS:+${PHYS:+
 $(sed 's/^/  /' <<<"$PHYS")}"
     fi
 
-    AVD_DIR=$(re_avd_dir "$AVD_NAME") || re_die "no AVD named '$AVD_NAME' (see 'emulator -list-avds')."
+    if ! AVD_DIR=$(re_avd_dir "$AVD_NAME"); then
+        # A phone's serial where the AVD name goes: that's the -d path
+        [ "$(adb -s "$AVD_NAME" get-state 2>/dev/null)" != "device" ] \
+            || re_die "'$AVD_NAME' is a connected device, not an AVD. Use it with: launch-emulator -d -s $AVD_NAME"
+        re_die "no AVD named '$AVD_NAME' (see 'emulator -list-avds')."
+    fi
 
     # A second emulator on the same AVD only works read-only
     RUNNING=""

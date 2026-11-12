@@ -67,6 +67,27 @@ re_emulator_serial() {
     re_running_emulators | awk -v n="$1" '$2 == n { print $1; exit }'
 }
 
+# Prints the "SERIAL AVD_NAME" line of the running emulator that ID names,
+# whichever way round it is: an 'emulator-NNNN' serial or an AVD name (a
+# serial wins, so an AVD named after someone else's serial can't shadow it).
+# --read-only lets two emulators run one AVD, and then the name is ambiguous:
+# the first is taken and the caller is warned to use a serial instead.
+# Prints nothing and fails when no running emulator matches.
+re_match_emulator() {
+    local LINE MATCHES
+    LINE=$(re_running_emulators | awk -v id="$1" '$1 == id { print; exit }')
+    if [ -z "$LINE" ]; then
+        MATCHES=$(re_running_emulators | awk -v id="$1" '$2 == id')
+        LINE=$(head -n 1 <<<"$MATCHES")
+        if [ -n "$LINE" ] && [ "$(wc -l <<<"$MATCHES")" -gt 1 ]; then
+            re_warn "several emulators run the AVD '$1', taking ${LINE%% *}. Name one by its serial to be sure:"
+            sed 's/^/  /' <<<"$MATCHES" >&2
+        fi
+    fi
+    [ -n "$LINE" ] || return 1
+    echo "$LINE"
+}
+
 # Succeeds once the device SERIAL has finished booting.
 re_boot_completed() {
     [ "$(adb -s "$1" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]
@@ -165,7 +186,8 @@ re_tool_cmd() {
 re_pick_device() {
     local FILTER=""
     if [ "${1:-}" = "--physical" ]; then FILTER="--physical"; shift; fi
-    local CALLER="$1" SERIAL="${2:-}" KIND="device"
+    local CALLER="$1" SERIAL="${2:-}" KIND="device" CMD LINE
+    CMD=${CALLER%% *}   # the command's name, for the error messages
     [ -n "$FILTER" ] && KIND="physical device"
     if [ -z "$SERIAL" ]; then
         local DEVICES=() LINE
@@ -186,13 +208,31 @@ re_pick_device() {
     if [ -n "$FILTER" ]; then
         case "$SERIAL" in
             emulator-*)
-                echo "Error: $SERIAL is an emulator, and ${CALLER%% *} only works on a physical device." >&2
+                echo "Error: $SERIAL is an emulator, and $CMD only works on a physical device." >&2
                 return 1 ;;
         esac
     fi
     if [ "$(adb -s "$SERIAL" get-state 2>/dev/null)" != "device" ]; then
-        echo "Error: device '$SERIAL' is not connected or not authorised (see 'adb devices')." >&2
-        return 1
+        # Nothing connected answers to it, so it may be an AVD name: where a
+        # serial is wanted that names one device just as well, as long as an
+        # emulator is running it. A physical device is never an AVD.
+        if [ -n "$FILTER" ]; then
+            if re_avd_dir "$SERIAL" >/dev/null; then
+                echo "Error: '$SERIAL' is an AVD name, and $CMD only works on a physical device." >&2
+                return 1
+            fi
+        elif LINE=$(re_match_emulator "$SERIAL"); then
+            echo "Note: '$SERIAL' is an AVD name, taking the emulator running it (${LINE%% *})." >&2
+            SERIAL=${LINE%% *}
+        elif re_avd_dir "$SERIAL" >/dev/null; then
+            echo "Error: '$SERIAL' is an AVD name, and no emulator is running it." >&2
+            echo "Start it with: launch-emulator $SERIAL" >&2
+            return 1
+        fi
+        if [ "$(adb -s "$SERIAL" get-state 2>/dev/null)" != "device" ]; then
+            echo "Error: device '$SERIAL' is not connected or not authorised (see 'adb devices')." >&2
+            return 1
+        fi
     fi
     echo "$SERIAL"
 }
