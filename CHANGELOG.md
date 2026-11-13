@@ -1,12 +1,13 @@
 # Changelog
 
-Every notable change to RE Extended Shell, newest first. Nothing is tagged as a
-release yet, so it's all one list.
+Every notable change to RE Extended Shell, newest first.
 
-`re-extended-shell --version` prints the commit your copy is at, with `-dirty`
-when you've edited something.
+`re-extended-shell --version` prints your copy's version: its release tag, plus
+the commits since it and `-dirty` when you've edited something.
 
-## Unreleased
+## 1.0.0 — 2026-11-13
+
+The first release of the consolidated toolkit.
 
 ### Added
 
