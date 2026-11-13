@@ -31,6 +31,7 @@ Output:
 Strings are read with stringx when it's installed: ASCII and UTF-16 (common
 in Windows binaries), its secret patterns, and decoding. Without it, binutils
 'strings' reads ASCII only and nothing is decoded.
+stringx is a single binary: https://codeberg.org/davidjosearaujo/stringx/releases
 
 Options:
   -n, --min-length LENGTH  Shortest string to consider (default: 8)
@@ -222,11 +223,10 @@ esac
 
 # --- Strings -----------------------------------------------------------------
 STR="$WORK/strings"
+re_strings_raw "$FILE" "$MINLEN" >"$STR"
 if [ -n "$STRINGX" ]; then
-    stringx -q -e all -l "$MINLEN:" "$FILE" >"$STR" 2>/dev/null
     re_section "Strings (at least $MINLEN characters, ASCII and UTF-16, read by stringx)"
 else
-    strings -a -n "$MINLEN" "$FILE" >"$STR" 2>/dev/null
     re_section "Strings (at least $MINLEN characters, ASCII only: install stringx for UTF-16 and decoding)"
 fi
 re_row Count "$(grep -c . "$STR")"

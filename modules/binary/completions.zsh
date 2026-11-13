@@ -19,5 +19,31 @@ _re_proto_extract() {
         '*:file or directory:_files'
 }
 
+_re_so_exports() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '(-g --grep)'{-g,--grep}'[only symbols matching this regular expression]:pattern: ' \
+        '(-l --limit --all)'{-l,--limit}'[most lines shown per list]:lines: ' \
+        '(-l --limit --all)--all[show every symbol, however many]' \
+        '--imports[also list the symbols it imports]' \
+        '*:file:_files'
+}
+
+_re_crypto_find() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '--min-confidence[only hits at this level or above]:level:(low medium high)' \
+        '*:file or directory:_files'
+}
+
+_re_crypto_libs() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '*:file or directory:_files'
+}
+
 compdef _re_bin_triage bin-triage
 compdef _re_proto_extract proto-extract
+compdef _re_so_exports so-exports
+compdef _re_crypto_find crypto-find
+compdef _re_crypto_libs crypto-libs

@@ -15,7 +15,15 @@ mkdir -p "$HOME" "$TMPDIR"
 unset ANDROID_HOME ANDROID_SDK_ROOT ANDROID_NDK_HOME JAVA_HOME RE_PROXY_PORT RE_PROXY_CERT \
       RE_EMULATOR_SNAPSHOT JADX JADX_GUI APKEDITOR_JAR RE_FRIDA_UNPIN_REF RE_FRIDA_UNPIN_SCRIPTS \
       RE_CONTAINER_ENGINE RE_ANDROID_CONTAINER_IMAGE
-export PATH="$TESTS/fake:$REPO/modules/core/bin:$REPO/modules/android/bin:$REPO/modules/binary/bin:$PATH"
+# The fakes first, then every module's bin/ (core first, as the shell loads them),
+# so adding a module needs no change here
+_RE_BINS="$REPO/modules/core/bin"
+for _D in "$REPO"/modules/*/bin; do
+    case "$_D" in "$REPO/modules/core/bin") continue ;; esac
+    [ ! -d "$_D" ] || _RE_BINS="$_RE_BINS:$_D"
+done
+export PATH="$TESTS/fake:$_RE_BINS:$PATH"
+unset _D _RE_BINS
 
 # Starts every scenario from a clean slate: no devices, no AVDs, empty log.
 fake_reset() {

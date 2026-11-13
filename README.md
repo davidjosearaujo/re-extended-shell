@@ -15,7 +15,9 @@ git-ignored `local/` folder, so updates never conflict with them.
   system CA on request (Android 14+ included), Frida with SSL unpinning, pulling, decompiling and
   patching APKs, split APK/XAPK handling, per-app logs and live traffic capture.
 - [Binary](#binary): a first look at native executables and libraries (ELF, Mach-O, PE),
-  and the protobuf schemas built into them.
+  the symbols they export, the crypto built into them, and the protobuf schemas too.
+- [Crypto](#crypto): every digest of a file, what a certificate says and pins to, and
+  what's inside a JWT.
 - [Core](#core): what every module shares, `re-doctor`, which checks your setup, and
   `re-extended-shell`, which shows everything that's installed.
 
@@ -42,6 +44,9 @@ More modules will follow. See [Adding a module](#adding-a-module), or go straigh
 - [Binary](#binary)
   - [Commands](#commands-1)
   - [Requirements](#requirements-2)
+- [Crypto](#crypto)
+  - [Commands](#commands-2)
+  - [Requirements](#requirements-3)
 - [Layout and customisation](#layout-and-customisation)
 - [Adding a module](#adding-a-module)
 - [Notes](#notes-1)
@@ -205,7 +210,7 @@ still work when the new ones aren't set.
 | `apk-pull [-s SERIAL] <PKG>` | Pulls every APK of an installed app (base + splits) into `./<PKG>-splits/`. With `--merge`, saves a single installable `./<PKG>.apk` instead (merged with `xapk-merger` when the app has splits; `-k/-p/-a` sign it with your own keystore). `-o` sets the output, `-f` replaces an existing one. |
 | `apk-decompile <file.apk>` | Decompiles into `./<name>/jadx/` (Java, with [jadx](https://github.com/skylot/jadx)) and `./<name>/apktool/` (smali, manifest and resources, with [apktool](https://apktool.org)), running whichever is installed. |
 | `apk-patch <file.apk>` | For phones you can't root: makes the app trust user CAs and your proxy's CA (`RE_PROXY_CERT`, embedded in the APK), overriding `<pin-set>`s, allows cleartext, sets `debuggable`, then rebuilds and signs it. `-o` sets the output, `-f` replaces an existing one. |
-| `apk-info [-s SERIAL] <file.apk \| PKG>` | A static first look at an app, without decompiling it: the components other apps can reach and the permission guarding each (flagging those anyone can get), the URIs its deep links open, `debuggable`/`allowBackup`/cleartext, its network security config (cleartext, user CAs, pins, debug overrides), the permissions it asks for and declares, its signature (debug certificate, Janus), and its code (dex, native libraries, and whether it's Flutter, React Native, Xamarin, Unity, Cordova or Capacitor). Works on a file or on an installed app, by package name. `--all` lists the components that aren't exported too. |
+| `apk-info [-s SERIAL] <file.apk \| PKG>` | A static first look at an app, without decompiling it: the components other apps can reach and the permission guarding each (flagging those anyone can get), the URIs its deep links open, `debuggable`/`allowBackup`/cleartext, its network security config (cleartext, user CAs, pins, debug overrides), the permissions it asks for and declares, its signature (debug certificate, Janus), the framework it's built with — Flutter, React Native (and Hermes), Unity (IL2CPP or Mono), Xamarin/.NET, Cocos2d-x, Unreal, Godot, NativeScript, Qt, Python, Capacitor or Cordova — with the evidence found, where the real code lives and the tool to get at it, and its code (dex and native libraries). The framework is matched on the manifest's engine class names (e.g. `org.cocos2dx.*`, `com.unity3d.player.*`) as well as asset markers and native libraries, so it's recognised even when the engine library has been renamed or sits in a config split. Works on a file or on an installed app, by package name. `--all` lists the components that aren't exported too. |
 | `app-intent [-s SERIAL] <PKG> [COMPONENT]` | Without a component, lists the app's exported components, numbered. With one (number, full name or `.ShortName`), starts it as another app would: `am start` for an activity, `am startservice`, `am broadcast`, or `content query` on a provider. `--action`, `--data URI` and `-e KEY=VALUE` fill the intent, and arguments after `--` go to `am`/`content`. `--data` alone tries a deep link. It runs as the shell user even when adbd is root, so it's refused where another app would be; `--root` reaches the components that aren't exported. |
 | `app-data [-s SERIAL] [--diff DIR] <PKG>` | Copies the app's private storage off a rooted device (`/data/data`, device-encrypted storage, external storage) into `./<PKG>-data/`, then lists its preferences, databases and the keys, tokens and password-like lines in them (with `stringx`, keys in databases and binary files too). `--diff DIR` compares the copy with an earlier one: preferences and other text files line by line, databases row by row (with `sqlite3`), so you see what an action in the app writes. |
 | `applog [-s SERIAL] [--start] <PKG>` | `logcat` for that app's process only. Waits for it to start and follows it across restarts. `--start` (re)launches it; arguments after `--` go to logcat. |
@@ -245,7 +250,8 @@ apk-pull --merge com.example.app && apk-decompile com.example.app.apk
   - `apk-info`, `app-intent`: `aapt2` from the SDK build-tools (`apk-info` also uses
     `apksigner` for the signature, and `unzip`)
   - `app-data`: a rooted device or emulator; `sqlite3` (in platform-tools) to diff databases;
-    `stringx` to find keys in databases and binary files
+    [`stringx`](https://codeberg.org/davidjosearaujo/stringx) to find keys in databases
+    and binary files
   - `apk-patch`: apktool **2.9 or newer** (older ones, like many distributions ship,
     can't rebuild most current apps), Java and the SDK build-tools
   - `xapk-merger`, `apk-pull --merge`: Java and the SDK build-tools
@@ -342,17 +348,51 @@ Native executables and libraries on Linux, macOS and Windows, with no device inv
 | --- | --- |
 | `bin-triage <file>` | A first look at an ELF, Mach-O or PE file, in one report: file type, size and hashes (MD5, SHA-1, SHA-256); whole-file entropy, which flags packed or encrypted files; hardening (PIE, NX, RELRO, stack canary, fortify and stripped for ELF; PIE, canary, signed and encrypted for Mach-O; ASLR, DEP and control-flow guard for PE); the libraries it links; the imports that matter (exec, network, memory, anti-debugging); the URLs, IP addresses, e-mail addresses, paths, keys and password-like strings in its text; and, with `stringx` (see Requirements below), what's hidden in Base64, hex, gzip or zlib data. `-n` sets the shortest string, `-l` how many lines each list shows, `--xor` also tries every single-byte XOR key (slow), and `--decode` decodes files over 32 MiB too. Other files get the generic parts. It only reads the file, it never runs it. |
 | `proto-extract <file \| dir>...` | Recovers the `.proto` files an app was built with, so its protobuf traffic can be decoded with field names instead of numbers. Code generated for the full protobuf runtime embeds each `.proto` file as a descriptor; this finds them in native libraries and executables (C++, Go, Rust, ...), in dex files (Java), in Python modules, and inside APK, JAR and other zip archives, and writes them back as `.proto` source into `./<name>-protos/` under their own paths. `--all` keeps the standard `google/protobuf` ones. Then: `protoc --decode=pkg.Message -I <name>-protos file.proto < body.bin`. Apps built with protobuf-lite (most Android apps) carry no descriptors. |
+| `so-exports <file>...` | The symbols a shared library or executable exports, demangled, so you know what can be hooked by name: its JNI entry points first (`Java_*` and `JNI_OnLoad`, what an Android app calls into), then the rest, and the module name a Frida hook addresses it by (an ELF `SONAME`, else the file name). `-g PATTERN` filters them (`-g 'crypt\|sign\|key'`), `-l` sets how many lines each list shows (`--all` for all of them), `--imports` also lists what it needs from other libraries. Ends with an `Interceptor.attach` line ready to paste. It only reads the file, it never runs it. |
+| `crypto-find <file \| dir>...` | Finds the crypto algorithms built into a binary by the constants they carry, whatever the code around them looks like: AES by its S-box, the SHA and MD5 families by their round tables, Blowfish by the digits of pi, ChaCha by its `expand 32-byte k` string, SM4, CRC-32, and base64 alphabets, **including the shuffled custom ones apps use to hide data**. The table constants are found in either byte order. Reads native binaries, dex files, and the members of an APK or other zip (`python3`, with its own zip reader). `--min-confidence low\|medium\|high` filters out the weaker hits. RC4 and plain XOR have no constants, so their absence says nothing, and a constant isn't proof the code reaches it — but it tells you what to look for. It only reads the file, it never runs it. |
+| `crypto-libs <file \| dir>...` | Names the crypto and TLS libraries compiled or bundled into a binary, from the version banners and package names in their strings: OpenSSL and its forks (BoringSSL, LibreSSL), mbedTLS, wolfSSL, GnuTLS, NSS, libsodium, Botan, Crypto++, and the Java ones in a dex (Bouncy Castle, Conscrypt, Tink, SQLCipher), with the version where the strings carry one — so you can tell an app's TLS stack and whether it's a long-outdated build. Reads native binaries, dex files, and the `.so`/`.dex`/`.jar` members of an APK (with `unzip`). It only reads the file, it never runs it. |
 
 ### Requirements
 
 - `file`.
-- `python3` for the entropy figure and `proto-extract` (standard library only).
-- `stringx` to read the strings: ASCII and UTF-16 (which binutils `strings` misses, and
-  Windows binaries are full of), its secret patterns, and decoding. Without it,
-  `bin-triage` falls back to `strings` (binutils; on macOS the Xcode command line tools),
-  ASCII only and without the decoded section.
+- `python3` for the entropy figure, `proto-extract` and `crypto-find` (standard library
+  only; `crypto-find` reads zip archives with Python's own reader, no `unzip` needed).
+- `unzip` for `crypto-libs` to look inside an APK or other zip (it reads a plain file
+  without it).
+- [`stringx`](https://codeberg.org/davidjosearaujo/stringx) to read the strings: ASCII
+  and UTF-16 (which binutils `strings` misses, and Windows binaries are full of), its
+  secret patterns, and decoding. It's a single binary, from
+  [its releases](https://codeberg.org/davidjosearaujo/stringx/releases); put it on your
+  PATH. Without it, `bin-triage` falls back to `strings` (binutils; on macOS the Xcode
+  command line tools), ASCII only and without the decoded section.
 - For the format details: `readelf` for ELF, `objdump` for PE (both from binutils), `otool` and `nm` for Mach-O.
+- `so-exports` reads the symbols with `nm`, falling back to `readelf` or `objdump`, and
+  demangles C++ names with `c++filt` when it's installed (all from binutils).
 - Anything missing is skipped and named in the report, and `re-doctor` lists it.
+
+## Crypto
+
+Hashes, certificates and tokens: the things you check by hand in the middle of
+everything else, with no device involved.
+
+### Commands
+
+| Command | What it does |
+| --- | --- |
+| `file-hash <file>...` | Every digest of a file this machine can compute, in one report: MD5, SHA-1, SHA-224, SHA-256, SHA-384, SHA-512, SHA3-256, SHA3-512, BLAKE2b and the CRC-32 (zlib's, the one zip tools show), with whichever tools are installed and all at once, so a big file takes as long as its slowest digest; plus a fuzzy hash (`ssdeep`, `tlsh`) which, unlike the rest, stays similar between two versions of a file. `--algo` picks the algorithms, `--vt` adds the VirusTotal URL for the SHA-256 (nothing is uploaded). An algorithm no tool here can do is skipped and named. |
+| `file-hash --check SUM <file>` | Compares a hash from a vendor page, a report or VirusTotal with every digest of the file and says whether it matches, so you don't have to know which algorithm you were given. Exits non-zero when nothing matches. |
+| `file-hash [--dups] -r <file \| dir>...` | One `DIGEST  path` line per file (SHA-256, or the first of `--algo`), walking directories. `--dups` instead groups the files that share a digest: the same library under several ABIs, or the splits that didn't change between two versions of an app. |
+| `cert-info [<file \| host[:port]>]` | What a certificate says: subject and issuer (and whether it's self-signed), validity with how long that is from now, key, signature, whether it's a CA, the names it covers, its SHA-256 and SHA-1 fingerprints, its **SPKI pin** (the `<pin digest="SHA-256">` value an app's network security config carries, so you can compare what the app expects with what your proxy or the real server presents) and the **`<subject_hash_old>.0`** name it takes in Android's system store. Reads PEM, DER and bundles; given a host it connects and reports the whole chain the server sends, with the TLS version and cipher. With no argument it reads your proxy's CA (`RE_PROXY_CERT`). `--pem` writes it back as PEM, which is how to turn a DER file into one. |
+| `jwt-decode <token \| ->` | Decodes a JSON Web Token: its header, its payload, and the claims that matter — issuer, subject, audience, and when it was issued, becomes usable and expires, in local time and as "3 hours ago" — so a token out of an app's storage or its traffic is readable at a glance. Flags `alg=none` and an expired or not-yet-valid token. `--secret` verifies an HS256/384/512 signature, which is how to confirm a guessed or leaked signing key; nothing is sent anywhere either way. |
+
+### Requirements
+
+- `openssl` for `cert-info` and `jwt-decode`, and for the SHA-3 and BLAKE2b digests;
+  `python3` for the CRC-32.
+- The hash tools this machine has: `md5sum`/`md5`, `shasum`, `sha256sum`, `b2sum`, else
+  `openssl`. `re-doctor` lists which digests `file-hash` can compute here.
+- `ssdeep` or `tlsh` for the fuzzy hash, `python3` or `jq` to pretty-print a token's
+  JSON (without them it's printed as it is). All optional.
 
 ## Layout and customisation
 

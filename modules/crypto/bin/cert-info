@@ -1,0 +1,278 @@
+#!/usr/bin/env bash
+# Read a certificate, or a TLS server's chain: what it says, when it expires and its pins.
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+usage() {
+    cat <<EOF
+Usage: cert-info [--leaf] [<file | host[:port]>]
+       cert-info --pem [-o FILE] [-f] [<file | host[:port]>]
+
+Reads an X.509 certificate (PEM or DER, a bundle of them too) and says what
+it is: who it belongs to and who signed it, when it expires and how long
+that is from now, its key, whether it's a CA and self-signed, the names it
+covers, its fingerprints, and the two values the Android work needs:
+
+  SPKI pin     what an app pins, the <pin digest="SHA-256"> value of a
+               network security config, so you can compare what the app
+               expects with what your proxy or the real server presents
+  Android CA   the <subject_hash_old>.0 file name it takes in the system
+               store, the one 'launch-emulator --ca' installs
+
+Given a host (or host:port, 443 by default) it connects, reports the whole
+chain the server sends and the TLS version and cipher it negotiated. With no
+argument at all it reads your proxy's CA (RE_PROXY_CERT).
+
+--pem writes the certificate (or the server's chain) as PEM, which is how to
+turn a DER file into one, or to save a server's CA for apk-patch.
+
+Options:
+  -o, --output FILE  Write --pem here instead of stdout
+  -f, --force        Replace an existing output
+  --leaf             Only the first certificate, not the rest of the chain
+  --pem              Output PEM instead of a report
+  -h, --help         Show this help
+
+Examples:
+  cert-info                          # your proxy's CA
+  cert-info api.example.com          # the chain that host serves
+  cert-info api.example.com:8443
+  cert-info --pem -o ca.pem burp-ca.der
+EOF
+}
+
+TARGET="" OUTPUT="" FORCE="" LEAF="" PEM=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -o|--output) re_need_arg "$1" "$#"; OUTPUT="$2"; shift 2 ;;
+        -f|--force) FORCE=1; shift ;;
+        --leaf) LEAF=1; shift ;;
+        --pem) PEM=1; shift ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
+        *)  [ -z "$TARGET" ] || re_unexpected_arg "$1" "cert-info reads one certificate or host at a time"
+            TARGET="$1"; shift ;;
+    esac
+done
+[ -n "$OUTPUT" ] || [ -n "$PEM" ] || [ -z "$FORCE" ] || re_die "-f applies to --pem -o FILE."
+[ -z "$OUTPUT" ] || [ -n "$PEM" ] || re_die "-o applies to --pem."
+re_require openssl
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+# Splits the PEM certificates on stdin into $WORK/cert-N.pem, printing how many
+split_pems() {
+    # Only the lines between BEGIN and END: what a server sends around them
+    # would otherwise be appended to the last file (and, after close(), replace
+    # what was written to it)
+    awk -v dir="$WORK" '
+        /-----BEGIN CERTIFICATE-----/ { n++; out = sprintf("%s/cert-%03d.pem", dir, n); inside = 1 }
+        inside { print > out }
+        /-----END CERTIFICATE-----/ { if (inside) { close(out); inside = 0 } }
+        END { print n + 0 }'
+}
+
+HOST="" PORT="" SOURCE=""
+if [ -z "$TARGET" ]; then
+    # No argument: the proxy CA, with the usual instructions when it isn't there
+    re_require_proxy_cert
+    TARGET=$RE_PROXY_CERT
+    SOURCE="your proxy's CA (RE_PROXY_CERT)"
+fi
+
+if [ -f "$TARGET" ]; then
+    [ -r "$TARGET" ] || re_die "cannot read $TARGET (permission denied)."
+    FORM=$(re_cert_form "$TARGET") \
+        || re_die "$TARGET is not an X.509 certificate in PEM or DER form."
+    if [ "$FORM" = DER ]; then
+        openssl x509 -inform DER -in "$TARGET" -outform PEM >"$WORK/cert-001.pem" 2>/dev/null \
+            || re_die "could not read $TARGET as DER."
+        COUNT=1
+    else
+        COUNT=$(split_pems <"$TARGET")
+    fi
+    [ "${COUNT:-0}" -gt 0 ] || re_die "no certificate found in $TARGET."
+    SOURCE=${SOURCE:-"$TARGET ($FORM)"}
+elif [ -e "$TARGET" ]; then
+    re_die "not a file: $TARGET"
+else
+    # A pasted URL names its host: drop the scheme and anything after the host
+    case "$TARGET" in
+        https://*|http://*) TARGET=${TARGET#*://}; TARGET=${TARGET%%/*} ;;
+    esac
+    case "$TARGET" in
+        */*|"") re_die "file not found: $TARGET" ;;
+        *:*) HOST=${TARGET%:*}; PORT=${TARGET##*:} ;;
+        *)   HOST=$TARGET; PORT=443 ;;
+    esac
+    case "$PORT" in ""|*[!0-9]*) re_die "not a port number: $PORT" ;; esac
+    # A host that doesn't answer would hold s_client for the TCP timeout, minutes
+    # on some systems; GNU timeout cuts that short where it exists (not on macOS)
+    TIMEOUT=()
+    ! command -v timeout >/dev/null 2>&1 || TIMEOUT=(timeout 20)
+    echo "Connecting to $HOST:$PORT..." >&2
+    if ! "${TIMEOUT[@]}" openssl s_client -connect "$HOST:$PORT" -servername "$HOST" -showcerts \
+            </dev/null >"$WORK/s_client" 2>"$WORK/s_client.err"; then
+        # s_client exits non-zero when the chain doesn't verify, which is normal
+        # through an intercepting proxy, so only an empty answer is an error
+        # openssl's error line is "id:error:code:lib:function:reason:file:line";
+        # the reason ("Connection refused") is what the user needs
+        REASON=$(awk -F: 'NF >= 6 { print $6; exit } NF { print; exit }' "$WORK/s_client.err")
+        grep -q 'BEGIN CERTIFICATE' "$WORK/s_client" \
+            || re_die "could not get a certificate from $HOST:$PORT: ${REASON:-no answer}."
+    fi
+    COUNT=$(split_pems <"$WORK/s_client")
+    [ "${COUNT:-0}" -gt 0 ] || re_die "no certificate found in the answer from $HOST:$PORT."
+    SOURCE="$HOST:$PORT"
+fi
+
+CERTS=()
+for C in "$WORK"/cert-*.pem; do CERTS+=("$C"); done
+[ -z "$LEAF" ] || CERTS=("${CERTS[0]}")
+
+# --- PEM output --------------------------------------------------------------
+if [ -n "$PEM" ]; then
+    if [ -n "$OUTPUT" ]; then
+        re_refuse_existing "$FORCE" "$OUTPUT"
+        cat "${CERTS[@]}" >"$OUTPUT"
+        if [ "${#CERTS[@]}" = 1 ]; then
+            echo "Certificate written: $OUTPUT"
+        else
+            echo "${#CERTS[@]} certificates written: $OUTPUT"
+        fi
+    else
+        cat "${CERTS[@]}"
+    fi
+    exit 0
+fi
+
+# --- The report --------------------------------------------------------------
+# openssl's own text for one field, e.g. x509f cert.pem -subject
+x509f() { openssl x509 -in "$1" -noout "${@:2}" 2>/dev/null; }
+
+# "subject=CN = Proxy CA" -> "CN=Proxy CA" (openssl 1.1 spaces around =, 1.0 doesn't)
+name_of() {
+    x509f "$1" "-$2" | sed "s/^$2=//" | awk '{ gsub(/ = /, "="); gsub(/^[ \t]+|[ \t]+$/, ""); print }'
+}
+
+# An openssl date as the rest of the module prints them, when date(1) can parse
+# it, else as openssl wrote it. Usage: shown "Nov 12 17:00:00 2026 GMT"
+shown() {
+    local E
+    if E=$(re_date_epoch "$1"); then re_epoch_date "$E"; else printf '%s' "$1"; fi
+}
+
+# The value of an X509v3 extension in openssl's -text output (the line under it)
+ext_of() {
+    awk -v want="$2" '
+        index($0, want) { found = 1; next }
+        found { gsub(/^[ \t]+|[ \t]+$/, ""); if (length($0)) { print; exit } }' <<<"$1"
+}
+
+N=0
+for C in "${CERTS[@]}"; do
+    N=$((N + 1))
+    TEXT=$(x509f "$C" -text)
+    SUBJECT=$(name_of "$C" subject)
+    ISSUER=$(name_of "$C" issuer)
+    WHICH="Certificate"
+    [ "${#CERTS[@]}" = 1 ] || WHICH="Certificate $N of ${#CERTS[@]}"
+    if [ -n "$HOST" ] && [ "$N" = 1 ]; then
+        WHICH="$WHICH (the one the server presents)"
+    elif [ -n "$HOST" ]; then
+        WHICH="$WHICH (sent to build the chain)"
+    fi
+    re_section "$WHICH"
+    [ -z "$SOURCE" ] || [ "$N" != 1 ] || re_row From "$SOURCE"
+    re_row Subject "$SUBJECT"
+    if [ "$SUBJECT" = "$ISSUER" ]; then
+        re_row Issuer "$ISSUER (self-signed)"
+    else
+        re_row Issuer "$ISSUER"
+    fi
+    re_row Serial "$(x509f "$C" -serial | sed 's/^serial=//')"
+
+    # Validity, and how far off the end is
+    FROM=$(x509f "$C" -startdate | sed 's/^notBefore=//')
+    TO=$(x509f "$C" -enddate | sed 's/^notAfter=//')
+    re_row Validity "$(shown "$FROM")  to  $(shown "$TO")"
+    NOW=$(date -u +%s)
+    if END=$(re_date_epoch "$TO"); then
+        LEFT=$((END - NOW))
+        if [ "$LEFT" -le 0 ]; then
+            re_row Expiry "${RE_C_FAIL}expired${RE_C_OFF} $(re_relative_time "$LEFT")"
+        elif [ "$LEFT" -lt 2592000 ]; then
+            re_row Expiry "${RE_C_WARN}expires $(re_relative_time "$LEFT")${RE_C_OFF}"
+        else
+            re_row Expiry "valid, expires $(re_relative_time "$LEFT")"
+        fi
+    elif ! x509f "$C" -checkend 0 >/dev/null; then
+        re_row Expiry "${RE_C_FAIL}expired${RE_C_OFF}"
+    fi
+    if START=$(re_date_epoch "$FROM"); then
+        [ "$START" -le "$NOW" ] || re_row Starts "${RE_C_FAIL}not valid yet${RE_C_OFF}, starts $(re_relative_time "$((START - NOW))")"
+    fi
+
+    # Key, signature and the extensions that matter
+    KEYALG=$(awk -F': ' '/Public Key Algorithm:/ { print $2; exit }' <<<"$TEXT")
+    KEYBITS=$(awk '/Public-Key:/ { gsub(/[()]/, ""); print $2, $3; exit }' <<<"$TEXT")
+    CURVE=$(awk -F': ' '/NIST CURVE:|ASN1 OID:/ { print $2; exit }' <<<"$TEXT")
+    re_row Key "$(printf '%s %s%s' "${KEYALG:-unknown}" "$KEYBITS" "${CURVE:+ $CURVE}" | tr -s ' ')"
+    re_row Signature "$(awk -F': ' '/Signature Algorithm:/ { print $2; exit }' <<<"$TEXT")"
+    BASIC=$(ext_of "$TEXT" "X509v3 Basic Constraints")
+    case "$BASIC" in
+        *CA:TRUE*) re_row CA "yes${BASIC#CA:TRUE}" ;;
+        "")        re_row CA "not stated (no basicConstraints)" ;;
+        *)         re_row CA "no" ;;
+    esac
+    USAGE=$(ext_of "$TEXT" "X509v3 Key Usage")
+    [ -z "$USAGE" ] || re_row "Key usage" "$USAGE"
+    EKU=$(ext_of "$TEXT" "X509v3 Extended Key Usage")
+    [ -z "$EKU" ] || re_row "Ext. usage" "$EKU"
+    SANS=$(ext_of "$TEXT" "X509v3 Subject Alternative Name")
+    [ -z "$SANS" ] || re_row Names "$(printf '%s' "$SANS" | cut -c 1-160)"
+
+    # Fingerprints, the pin an app would carry, and the system store file name
+    re_row SHA-256 "$(x509f "$C" -fingerprint -sha256 | sed 's/^.*Fingerprint=//')"
+    re_row SHA-1 "$(x509f "$C" -fingerprint -sha1 | sed 's/^.*Fingerprint=//')"
+    PIN=$(x509f "$C" -pubkey \
+        | openssl pkey -pubin -outform der 2>/dev/null \
+        | openssl dgst -sha256 -binary 2>/dev/null \
+        | openssl base64 -A 2>/dev/null)
+    if [ -n "$PIN" ]; then
+        re_row "SPKI pin" "sha256/$PIN"
+        PINNED=1
+    fi
+    HASH=$(x509f "$C" -subject_hash_old)
+    case "$HASH" in [0-9a-f]*) re_row "Android CA" "$HASH.0" ;; esac
+done
+
+# What the connection itself did, once, after the certificates
+if [ -n "$HOST" ]; then
+    re_section "Connection"
+    re_row Host "$HOST:$PORT"
+    # Either shape openssl reports the handshake in: a session block with
+    # "Protocol  :" and "Cipher  :" rows, or one "New, TLSv1.3, Cipher is ..." line
+    PROTO=$(awk -F': *' '/^ *Protocol *:/ { print $2; exit }' "$WORK/s_client")
+    [ -n "$PROTO" ] || PROTO=$(awk -F', ' '/^New, / { print $2; exit }' "$WORK/s_client")
+    CIPHER=$(awk -F': *' '/^ *Cipher *:/ { print $2; exit }' "$WORK/s_client")
+    [ -n "$CIPHER" ] || CIPHER=$(sed -n 's/^New, .*Cipher is //p' "$WORK/s_client" | head -n 1)
+    [ -z "$PROTO" ] || re_row Protocol "$PROTO"
+    [ -z "$CIPHER" ] || re_row Cipher "$CIPHER"
+    VERIFY=$(awk -F': *' '/^ *Verify return code:/ { print $2; exit }' "$WORK/s_client")
+    case "$VERIFY" in
+        "0 (ok)") re_row Verified "yes, against this machine's CA store" ;;
+        "")       ;;
+        *)        re_row Verified "no: $VERIFY" ;;
+    esac
+fi
+
+echo
+[ -z "${PINNED:-}" ] \
+    || echo "An app's pins: compare its <pin digest=\"SHA-256\"> values with the SPKI pin above (apk-info prints them)."

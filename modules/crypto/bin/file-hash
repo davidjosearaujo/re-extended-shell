@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+# Print every digest of a file, check one against an expected value, and find duplicates.
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+usage() {
+    cat <<EOF
+Usage: file-hash [--algo LIST] [--vt] <file>...
+       file-hash --check SUM <file>
+       file-hash [--algo LIST] [--dups] -r <file | dir>...
+
+Prints every digest of a file this machine can compute: MD5, SHA-1, SHA-224,
+SHA-256, SHA-384, SHA-512, SHA3-256, SHA3-512, BLAKE2b and the CRC-32 (zlib's,
+the one zip tools show), with whichever tools are installed (md5sum/md5,
+shasum, sha256sum, b2sum, openssl, python3), and a fuzzy hash when ssdeep or
+tlsh is there: those differ only a little between two versions of a file, so
+they say how much changed. The digests are computed side by side, so a big
+file takes about as long as its slowest one. An algorithm no tool here can
+compute is skipped and named at the end.
+
+--check takes a hash from a vendor page, a report or VirusTotal and says
+whether the file matches, whichever algorithm it is: it is compared with all
+of them, so you don't have to know which one you were given. It exits
+non-zero when nothing matches, so it scripts.
+
+Output:
+  a report per file; with -r, one "DIGEST  path" line per file instead
+  (the first algorithm of --algo, SHA-256 by default), and with --dups only
+  the files that share a digest, grouped.
+
+Options:
+  -r, --recursive  Walk directories, printing one line per file
+  --algo LIST      Only these algorithms, comma-separated (default: all of them)
+  --dups           Only the files sharing a digest, grouped (implies -r)
+  --check SUM      Compare SUM with every digest of one file
+  --vt             Also print the VirusTotal URL for the SHA-256 (nothing is uploaded)
+  -h, --help       Show this help
+
+Examples:
+  file-hash app.apk
+  file-hash --check 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 app.apk
+  file-hash --algo sha256 -r app-splits/
+  file-hash --dups -r libs/            # the same library under several ABIs
+EOF
+}
+
+ALGOS="" RECURSIVE="" DUPS="" CHECK="" CHECK_RAW="" VT="" INPUTS=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -r|--recursive) RECURSIVE=1; shift ;;
+        --algo) re_need_arg "$1" "$#"; ALGOS="$2"; shift 2 ;;
+        --dups) DUPS=1; RECURSIVE=1; shift ;;
+        --check) re_need_arg "$1" "$#"; CHECK_RAW="$2"; shift 2 ;;
+        --vt) VT=1; shift ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
+        *)  [ -e "$1" ] || re_die "file not found: $1"
+            [ -r "$1" ] || re_die "cannot read $1 (permission denied)."
+            INPUTS+=("$1"); shift ;;
+    esac
+done
+[ "${#INPUTS[@]}" -gt 0 ] || re_usage_error "missing <file>."
+[ -z "$VT" ] || [ -z "$RECURSIVE" ] || re_die "--vt goes with the report, not with -r."
+
+# --check compares one file, and needs every algorithm to find the match
+if [ -n "$CHECK_RAW" ]; then
+    [ "${#INPUTS[@]}" = 1 ] || re_die "--check takes one file, got ${#INPUTS[@]}."
+    [ -z "$RECURSIVE" ] || re_die "--check and -r don't go together."
+    [ -z "$ALGOS" ] || re_die "--check compares every algorithm, so --algo doesn't apply."
+    # As pasted: a 0x prefix, spaces, colons and case don't matter
+    CHECK=$(printf '%s' "$CHECK_RAW" | tr -d ' :\t' | tr 'A-F' 'a-f' | sed 's/^0x//')
+    case "$CHECK" in ""|*[!0-9a-f]*) re_die "--check takes a hex digest, got: $CHECK_RAW" ;; esac
+fi
+
+# The algorithms to print, in order: --algo's list (once each), or all of them
+WANTED=() LABELS=()
+if [ -n "$ALGOS" ]; then
+    for A in $(printf '%s' "$ALGOS" | tr ',A-Z' ' a-z'); do
+        case " ${WANTED[*]:-} " in *" $A "*) continue ;; esac
+        FOUND=""
+        for PAIR in $RE_HASH_ALGOS; do
+            if [ "${PAIR%%:*}" = "$A" ]; then WANTED+=("$A"); LABELS+=("${PAIR#*:}"); FOUND=1; fi
+        done
+        [ -n "$FOUND" ] || re_die "unknown algorithm: $A (one of:$(for P in $RE_HASH_ALGOS; do printf ' %s' "${P%%:*}"; done))"
+    done
+else
+    for PAIR in $RE_HASH_ALGOS; do WANTED+=("${PAIR%%:*}"); LABELS+=("${PAIR#*:}"); done
+fi
+
+# The files to work on. A directory needs -r, so a mistyped argument can't
+# quietly walk a tree.
+FILES=()
+for INPUT in "${INPUTS[@]}"; do
+    if [ -d "$INPUT" ]; then
+        [ -n "$RECURSIVE" ] || re_die "$INPUT is a directory (use -r to walk it)."
+        while IFS= read -r F; do FILES+=("$F"); done < <(find "$INPUT" -type f | LC_ALL=C sort)
+    elif [ -f "$INPUT" ]; then
+        FILES+=("$INPUT")
+    else
+        re_die "not a regular file: $INPUT"
+    fi
+done
+[ "${#FILES[@]}" -gt 0 ] || re_die "no files found in ${INPUTS[*]}."
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+# --- One line per file, and the duplicates among them ------------------------
+if [ -n "$RECURSIVE" ]; then
+    # One algorithm is enough to tell files apart, so --algo picks it and
+    # SHA-256 stands in otherwise (the full list would read the tree ten times)
+    if [ -n "$ALGOS" ]; then
+        ALGO=${WANTED[0]} LABEL=${LABELS[0]}
+    else
+        ALGO=sha256 LABEL=SHA-256
+    fi
+    for F in "${FILES[@]}"; do
+        [ -r "$F" ] || re_die "cannot read $F (permission denied)."
+        H=$(re_hash "$ALGO" "$F") \
+            || re_die "no tool here computes $LABEL (install coreutils, or openssl)."
+        printf '%s\t%s\n' "$H" "$F" >>"$WORK/sums"
+    done
+    if [ -n "$DUPS" ]; then
+        # One record per group of 2+ identical files, paths joined by a control
+        # character so each record stays on one line through sort
+        LC_ALL=C sort "$WORK/sums" | awk -F'\t' '
+            BEGIN { sep = sprintf("%c", 28) }
+            { n[$1]++; p[$1] = (n[$1] == 1 ? $2 : p[$1] sep $2) }
+            END { for (h in n) if (n[h] > 1) printf "%d\t%s\t%s\n", n[h], h, p[h] }' \
+        | sort -rn -k1,1 | awk -F'\t' -v label="$LABEL" -v files="${#FILES[@]}" '
+            BEGIN { sep = sprintf("%c", 28) }
+            { gsub(sep, "\n    ", $3)
+              printf "\n  %d files, %s %s\n    %s\n", $1, label, $2, $3
+              g++; d += $1 }
+            END {
+                print ""
+                if (!g) printf "No duplicates among %d file%s.\n", files, (files == 1 ? "" : "s")
+                else printf "%d group%s of identical files, %d of the %d files.\n", \
+                    g, (g == 1 ? "" : "s"), d, files
+            }'
+    else
+        awk -F'\t' '{ printf "%s  %s\n", $1, $2 }' "$WORK/sums"
+    fi
+    exit 0
+fi
+
+# --- A report per file -------------------------------------------------------
+SKIPPED=""   # algorithms no tool here can compute, named once at the end
+MATCHED=""
+for F in "${FILES[@]}"; do
+    re_section "$(basename -- "$F")"
+    re_row File "$F"
+    SIZE=$(wc -c <"$F" | tr -d ' ')
+    re_row Size "$SIZE bytes$(awk -v b="$SIZE" 'BEGIN {
+        split("KiB MiB GiB", u, " ")
+        if (b < 1024) exit
+        n = b / 1024; i = 1
+        while (n >= 1024 && i < 3) { n /= 1024; i++ }
+        printf " (%.1f %s)", n, u[i]
+    }')"
+
+    # Every digest at once, each to its own file: the file is read from the
+    # page cache after the first pass, and the hashing spreads over the cores.
+    # An algorithm no tool can do leaves its file empty.
+    for ALGO in "${WANTED[@]}"; do
+        re_hash "$ALGO" "$F" >"$WORK/$ALGO" 2>/dev/null &
+    done
+    wait
+
+    SHA256="" I=0
+    while [ "$I" -lt "${#WANTED[@]}" ]; do
+        ALGO=${WANTED[$I]} LABEL=${LABELS[$I]}
+        I=$((I + 1))
+        H=$(cat "$WORK/$ALGO")
+        if [ -z "$H" ]; then
+            case " $SKIPPED " in *" $LABEL "*) ;; *) SKIPPED="$SKIPPED $LABEL" ;; esac
+            continue
+        fi
+        [ "$ALGO" != sha256 ] || SHA256=$H
+        if [ -n "$CHECK" ] && [ "$CHECK" = "$(printf '%s' "$H" | tr 'A-F' 'a-f')" ]; then
+            MATCHED=$LABEL
+            re_row "$LABEL" "$H  ${RE_C_OK}<- matches --check${RE_C_OFF}"
+        else
+            re_row "$LABEL" "$H"
+        fi
+    done
+
+    # Fuzzy hashes: two versions of one file have similar ones, unlike the
+    # digests above, so they say how much changed between releases
+    if command -v ssdeep >/dev/null 2>&1; then
+        re_row ssdeep "$(ssdeep "$F" 2>/dev/null | grep -v '^ssdeep\|^$' | sed 's/,".*//' | head -n 1)"
+    fi
+    if command -v tlsh >/dev/null 2>&1; then
+        re_row tlsh "$(tlsh -f "$F" 2>/dev/null | awk '{ print $1 }')"
+    fi
+
+    if [ -n "$VT" ]; then
+        if [ -n "$SHA256" ]; then
+            re_row VirusTotal "https://www.virustotal.com/gui/file/$SHA256"
+        else
+            re_warn "--vt needs the SHA-256, which no tool here computes."
+        fi
+    fi
+done
+
+echo
+[ -z "$SKIPPED" ] || echo "Skipped, no tool here computes them:$SKIPPED"
+if [ -n "$CHECK" ]; then
+    if [ -n "$MATCHED" ]; then
+        echo "${RE_C_OK}Match${RE_C_OFF}: ${FILES[0]} has that $MATCHED digest."
+    else
+        echo "${RE_C_FAIL}No match${RE_C_OFF}: no digest of ${FILES[0]} equals $CHECK."
+        exit 1
+    fi
+fi

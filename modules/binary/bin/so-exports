@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# List the symbols a library or executable exports, with its JNI entry points first.
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+usage() {
+    cat <<EOF
+Usage: so-exports [-g PATTERN] [-l LIMIT | --all] [--imports] <file>...
+
+Lists what a shared library or executable exports: the symbols another
+module (or Frida) can reach by name, demangled, with the JNI entry points
+first, because those are the ones an Android app calls into. Reads ELF,
+Mach-O and anything else nm understands, with readelf or objdump as a
+fallback, and prints the module name a Frida hook needs (an ELF SONAME,
+else the file name).
+
+It only reads the file, it never runs it.
+
+Options:
+  -g, --grep PATTERN  Only symbols matching this extended regular expression
+                      (case-insensitive), e.g. -g 'encrypt|sign|key'
+  -l, --limit LIMIT   Most lines shown per list (default: 20)
+  --all               Show every symbol, however many
+  --imports           Also list the symbols it imports from other libraries
+  -h, --help          Show this help
+
+Examples:
+  so-exports lib/arm64-v8a/libnative-lib.so
+  so-exports -g 'crypt|cipher' libfoo.so
+  so-exports --all libfoo.so | grep -i token
+EOF
+}
+
+PATTERN="" LIMIT=20 IMPORTS="" FILES=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -g|--grep) re_need_arg "$1" "$#"; PATTERN="$2"; shift 2 ;;
+        -l|--limit) re_need_arg "$1" "$#"; LIMIT="$2"; shift 2 ;;
+        --all) LIMIT=all; shift ;;
+        --imports) IMPORTS=1; shift ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
+        *)  [ -f "$1" ] || re_die "file not found: $1"
+            [ -r "$1" ] || re_die "cannot read $1 (permission denied)."
+            FILES+=("$1"); shift ;;
+    esac
+done
+[ "${#FILES[@]}" -gt 0 ] || re_usage_error "missing <file>."
+case "$LIMIT" in
+    all) LIMIT=1000000 ;;
+    ""|*[!0-9]*|0) re_die "-l takes a number above 0 (--all shows everything)." ;;
+esac
+if [ -n "$PATTERN" ]; then
+    # grep exits 2 for a pattern it can't parse; 1 is just "no match"
+    printf '' | grep -E -- "$PATTERN" >/dev/null 2>&1
+    [ "$?" != 2 ] || re_die "-g: not a valid extended regular expression: $PATTERN"
+fi
+
+# Which readers this machine has, looked up once
+HAVE_NM="" HAVE_READELF="" HAVE_OBJDUMP="" HAVE_CXXFILT=""
+command -v nm >/dev/null 2>&1 && HAVE_NM=1
+command -v readelf >/dev/null 2>&1 && HAVE_READELF=1
+command -v objdump >/dev/null 2>&1 && HAVE_OBJDUMP=1
+command -v c++filt >/dev/null 2>&1 && HAVE_CXXFILT=1
+[ -n "$HAVE_NM$HAVE_READELF$HAVE_OBJDUMP" ] \
+    || re_die "none of nm, readelf or objdump is installed (binutils on Linux, the Xcode command line tools on macOS)."
+
+# C++ names as they were written, when the demangler is there
+demangle() { if [ -n "$HAVE_CXXFILT" ]; then c++filt; else cat; fi; }
+
+# The symbol names a file defines (exports) or leaves undefined (imports), one
+# per line, sorted. Tries the GNU nm flags, then the BSD ones, then readelf and
+# objdump, so it works with either userland and whatever is installed.
+list_syms() {
+    local F="$1" KIND="$2" OUT=""
+    if [ -n "$HAVE_NM" ]; then
+        if [ "$KIND" = exports ]; then
+            OUT=$(nm -D --defined-only "$F" 2>/dev/null)
+            [ -n "$OUT" ] || OUT=$(nm -gU "$F" 2>/dev/null)
+            [ -n "$OUT" ] || OUT=$(nm -g --defined-only "$F" 2>/dev/null)
+            # Code and data only: 'A' is a version node (ZLIB_1.2.0), which
+            # nothing can call or hook
+            OUT=$(printf '%s\n' "$OUT" | awk 'NF >= 3 && $(NF-1) ~ /^[TWDBRVGSi]$/ { print $NF }')
+        else
+            OUT=$(nm -D --undefined-only "$F" 2>/dev/null)
+            [ -n "$OUT" ] || OUT=$(nm -gu "$F" 2>/dev/null)
+            [ -n "$OUT" ] || OUT=$(nm -g --undefined-only "$F" 2>/dev/null)
+            OUT=$(printf '%s\n' "$OUT" | awk 'NF >= 2 && $(NF-1) == "U" { print $NF }')
+        fi
+    fi
+    if [ -z "$OUT" ] && [ -n "$HAVE_READELF" ]; then
+        OUT=$(readelf --wide --dyn-syms "$F" 2>/dev/null | awk -v kind="$KIND" '
+            NF >= 8 && ($5 == "GLOBAL" || $5 == "WEAK") {
+                if (kind == "exports" && $7 != "UND") print $8
+                if (kind == "imports" && $7 == "UND") print $8
+            }')
+    fi
+    if [ -z "$OUT" ] && [ "$KIND" = exports ] && [ -n "$HAVE_OBJDUMP" ]; then
+        OUT=$(objdump -T "$F" 2>/dev/null | awk 'NF > 6 && $4 != "*UND*" { print $NF }')
+    fi
+    # "0000 T name@@GLIBC_2.17" -> "name"
+    printf '%s\n' "$OUT" | awk 'NF { print $NF }' | sed 's/@@*.*$//' | demangle | LC_ALL=C sort -u | awk 'NF'
+}
+
+# A section of symbols, filtered by -g when given. Usage: show_list TITLE LIST
+show_list() {
+    local TITLE="$1" LIST="$2"
+    if [ -n "$PATTERN" ]; then
+        LIST=$(printf '%s\n' "$LIST" | grep -iE -- "$PATTERN" || true)
+        TITLE="$TITLE matching '$PATTERN'"
+    fi
+    re_section "$TITLE"
+    printf '%s\n' "$LIST" | re_list "$LIMIT"
+    SHOWN=$LIST
+}
+
+for F in "${FILES[@]}"; do
+    re_section "$(basename -- "$F")"
+    re_row File "$F"
+    re_row Type "$(file -bL "$F" 2>/dev/null || echo unknown)"
+
+    # The name a Frida hook addresses the module by
+    MODULE=""
+    [ -z "$HAVE_READELF" ] || MODULE=$(readelf -d "$F" 2>/dev/null | awk -F'[][]' '/SONAME/ { print $2; exit }')
+    MODULE=${MODULE:-$(basename -- "$F")}
+    re_row Module "$MODULE"
+
+    EXPORTS=$(list_syms "$F" exports)
+    IMPORTED=$(list_syms "$F" imports)
+    NEXP=$(printf '%s' "$EXPORTS" | awk 'NF' | wc -l | tr -d ' ')
+    NIMP=$(printf '%s' "$IMPORTED" | awk 'NF' | wc -l | tr -d ' ')
+    re_row Exports "$NEXP"
+    re_row Imports "$NIMP"
+    if [ "$NEXP" = 0 ] && [ "$NIMP" = 0 ]; then
+        echo "  Nothing readable here: it may be stripped of its dynamic symbols, or not an object file."
+        continue
+    fi
+
+    # JNI first, on their own: these are what an Android app calls into. The
+    # rest follows, without repeating them.
+    JNI=$(printf '%s\n' "$EXPORTS" | grep -E '^(Java_|JNI_On)' || true)
+    REST=$EXPORTS
+    HOOK=""
+    if [ -n "$JNI" ]; then
+        show_list "JNI entry points" "$JNI"
+        HOOK=$(printf '%s\n' "$SHOWN" | awk 'NF { print; exit }')
+        REST=$(printf '%s\n' "$EXPORTS" | grep -vE '^(Java_|JNI_On)' || true)
+        show_list "Other exports" "$REST"
+    else
+        show_list "Exports" "$REST"
+    fi
+    [ -n "$HOOK" ] || HOOK=$(printf '%s\n' "$SHOWN" | awk 'NF { print; exit }')
+
+    [ -z "$IMPORTS" ] || show_list "Imports" "$IMPORTED"
+
+    # A hook for the first symbol worth one, ready to paste
+    if [ -n "$HOOK" ]; then
+        echo
+        echo "Hook one with Frida (frida -U -f <package> -l hook.js, or frida-server --ssl-unpinning -l hook.js):"
+        echo "  Interceptor.attach(Module.getExportByName('$MODULE', '$HOOK'), {"
+        echo "      onEnter(args) { console.log('$HOOK', args[0]); }"
+        echo "  });"
+    fi
+done

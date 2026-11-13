@@ -352,6 +352,88 @@ re_apk_xmltree() {
     "$RE_AAPT2" dump xmltree --file "${2:-AndroidManifest.xml}" "$1" 2>/dev/null
 }
 
+# Names the framework or game engine an APK is built with, from two kinds of
+# signal fed on stdin, one per line: the APK's entry paths (lib/*.so, assets/*)
+# and the fully-qualified class names in its manifest (activities, services,
+# providers). The manifest classes are the strongest signal -- org.cocos2dx.*,
+# com.unity3d.player.*, io.flutter.* and the like give the engine away even when
+# the native library has been renamed (libgame.so) or lives in a config split,
+# because the manifest is always in the base APK. Prints one tab-separated line
+# for the first engine matched, else nothing (a plain Java/Kotlin app):
+#   ENGINE \t EVIDENCE \t CODE \t HOW-TO-GET-AT-THE-CODE
+# EVIDENCE is the actual matching lines (up to 3), so the call is verifiable.
+# Order matters: the more specific engines (Unity IL2CPP before Mono) come
+# first, and the first match wins. A class marker is written (^|[/.])pkg[/.]
+# so it matches both a path (a/b/C) and a class name (a.b.C).
+re_apk_framework() {
+    local _sig
+    _sig=$(cat)
+    # PATTERN ENGINE CODE HOW: prints the record and succeeds if PATTERN matches
+    _re_fw() {
+        local ev
+        ev=$(grep -Eh -- "$1" <<<"$_sig" | head -3 | tr '\n' ' ' | sed 's/ *$//')
+        [ -n "$ev" ] || return 1
+        printf '%s\t%s\t%s\t%s\n' "$2" "$ev" "$3" "$4"
+    }
+    _re_fw '(^|/)libflutter\.so$|^assets/flutter_assets/|(^|[/.])io[/.]flutter[/.]' \
+        "Flutter (Dart)" \
+        "Dart, compiled to native in lib/*/libapp.so (not in the dex)" \
+        "blutter; reFlutter to re-pack it trusting your proxy CA" && return
+    _re_fw '^assets/index\.android\.bundle$|(^|/)libhermes\.so$|(^|[/.])com[/.]facebook[/.]react[/.]' \
+        "React Native" \
+        "JavaScript in assets/index.android.bundle (Hermes bytecode when libhermes is present)" \
+        "de-minify the JS; hermes-dec or hbctool for Hermes bytecode" && return
+    _re_fw '(^|/)libil2cpp\.so$|(^|/)global-metadata\.dat$' \
+        "Unity (IL2CPP)" \
+        "C#, compiled to native in libil2cpp.so, with type names in global-metadata.dat" \
+        "Il2CppDumper or Il2CppInspector (needs the .so and the .dat)" && return
+    _re_fw '(^|/)libunity\.so$|^assets/bin/Data/Managed/[^/]+\.dll$' \
+        "Unity (Mono)" \
+        ".NET assemblies in assets/bin/Data/Managed/*.dll" \
+        "dnSpy or ILSpy" && return
+    _re_fw '(^|[/.])com[/.]unity3d[/.]player[/.]' \
+        "Unity" \
+        "C# game; whether it's IL2CPP or Mono isn't visible from the manifest alone" \
+        "look for libil2cpp.so (IL2CPP) or assets/bin/Data/Managed/*.dll (Mono)" && return
+    _re_fw '(^|/)lib(monodroid|monosgen|xamarin)[^/]*\.so$|^assemblies/|^assemblies\.blob$|(^|[/.])mono[/.]MonoRuntimeProvider' \
+        "Xamarin / .NET for Android" \
+        ".NET assemblies in assemblies/ (or packed in assemblies.blob)" \
+        "dnSpy or ILSpy; xamarin-decompress for a compressed blob" && return
+    _re_fw '(^|/)libcocos[^/]*\.so$|^assets/jsb-adapter/|^assets/(src/|project\.json$|main\.js$)|(^|[/.])org[/.]cocos2dx[/.]' \
+        "Cocos2d-x / Cocos Creator" \
+        "scripts in assets/ (JavaScript or Lua), often XXTEA-encrypted" \
+        "read the scripts; if encrypted, crypto-find the .so for the XXTEA key" && return
+    _re_fw '(^|/)lib(Unreal|UE[0-9])[^/]*\.so$|(^|[/.])com[/.]epicgames[/.]' \
+        "Unreal Engine" \
+        "C++ native; game assets packed in .pak files (often in the OBB)" \
+        "Unreal .pak tools such as FModel" && return
+    _re_fw '(^|/)libgodot[^/]*\.so$|(^|/)[^/]+\.pck$|(^|[/.])(org[/.]godotengine|com[/.]godot)[/.]' \
+        "Godot" \
+        "scenes and GDScript packed in the .pck" \
+        "Godot RE tools such as gdsdecomp" && return
+    _re_fw '(^|/)libNativeScript[^/]*\.so$|^assets/app/|(^|[/.])com[/.]tns[/.]' \
+        "NativeScript" \
+        "JavaScript in assets/app/" \
+        "read the JS in assets/app/" && return
+    _re_fw '(^|/)libQt[0-9][^/]*\.so$|(^|[/.])org[/.]qtproject[/.]' \
+        "Qt" \
+        "native C++; QML may be in assets/ or embedded as a resource" \
+        "bin-triage the .so; look for QML in assets/" && return
+    _re_fw '(^|/)libpython[^/]*\.so$|^assets/chaquopy/|(^|[/.])org[/.](kivy|beeware)[/.]' \
+        "Python" \
+        "Python bytecode in assets/ (Kivy/BeeWare, or Chaquopy in assets/chaquopy/)" \
+        "decompile the .pyc (decompyle3)" && return
+    _re_fw '^assets/capacitor\.config\.json$|^assets/public/index\.html$|(^|[/.])com[/.]getcapacitor[/.]' \
+        "Capacitor" \
+        "web app in assets/public/" \
+        "read the web code in assets/public/" && return
+    _re_fw '^assets/www/cordova(_plugins)?\.js$|^assets/www/index\.html$|(^|[/.])org[/.]apache[/.]cordova' \
+        "Cordova / PhoneGap" \
+        "web app in assets/www/" \
+        "read the web code in assets/www/" && return
+    return 1
+}
+
 # awk functions for aapt2's trees and the records below, put in front of an
 # awk program: awk "$RE_AWK_LIB"'...'
 #   xt(line)   parses a line of an aapt2 tree. Sets XT to E (element), A

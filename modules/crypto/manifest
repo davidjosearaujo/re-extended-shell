@@ -1,0 +1,5 @@
+# What the crypto module is, and its settings.
+# Read by re-extended-shell and by every command's --help (see core/lib.sh).
+#   about: one line saying what the module is for
+#   setting: NAME | default | what it does | commands that use it
+about: Hashes, certificates and tokens: every digest of a file, what a certificate says and pins to, and what's inside a JWT.

@@ -4,5 +4,5 @@
 #   setting: NAME | default | what it does | commands that use it
 about: What every module shares: settings, PATH helpers, re-doctor and re-extended-shell.
 setting: RE_PROXY_PORT | 9090 (or RE_ZAP_PORT) | Port your intercepting proxy (ZAP, Burp, mitmproxy, ...) listens on, on this machine | device-proxy frida-server re-doctor
-setting: RE_PROXY_CERT | certs/proxy_ca.cer in the repo (or RE_ZAP_CERT, or certs/zap_root_ca.cer) | Your proxy's root CA certificate, PEM or DER | frida-server apk-patch re-doctor
+setting: RE_PROXY_CERT | certs/proxy_ca.cer in the repo (or RE_ZAP_CERT, or certs/zap_root_ca.cer) | Your proxy's root CA certificate, PEM or DER | frida-server apk-patch cert-info re-doctor
 setting: JAVA_HOME | the JDK behind java on PATH, else Homebrew's openjdk | JDK for the Java-based tools | apk-decompile apk-patch xapk-merger re-doctor

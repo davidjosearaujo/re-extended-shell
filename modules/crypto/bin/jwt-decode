@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+# Decode a JWT: its header, payload, claims and whether it has expired.
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+usage() {
+    cat <<EOF
+Usage: jwt-decode [--secret SECRET] <token | ->
+
+Decodes a JSON Web Token and prints its header, its payload and the claims
+that matter: who issued it, who it is for, when it was issued and when it
+expires, in local time and as "3 hours ago", so a token found in an app's
+storage or its traffic is readable at a glance. '-' reads the token from
+standard input, and a leading "Bearer " is ignored, so an Authorization
+header can be pasted as it is.
+
+Nothing is sent anywhere: the signature is not checked unless --secret is
+given, and the payload of a JWT is only base64url, never encrypted, so what
+it says is not proof of anything the signature doesn't back.
+
+--secret verifies an HMAC signature (HS256, HS384, HS512) with that key,
+which is how to confirm a guessed or leaked signing secret. It exits
+non-zero when the signature doesn't match.
+
+Options:
+  --secret SECRET  Verify an HS256/384/512 signature with this key
+  -h, --help       Show this help
+
+Examples:
+  jwt-decode eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc
+  jwt-decode --secret secret "\$TOKEN"
+  pbpaste | jwt-decode -
+EOF
+}
+
+TOKEN="" SECRET="" HAVE_SECRET=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --secret) re_need_arg "$1" "$#"; SECRET="$2"; HAVE_SECRET=1; shift 2 ;;
+        -h|--help) re_help; exit 0 ;;
+        -) TOKEN="-"; shift ;;
+        -*) re_unknown_option "$1" ;;
+        *)  [ -z "$TOKEN" ] || re_unexpected_arg "$1" "jwt-decode takes one token"
+            TOKEN="$1"; shift ;;
+    esac
+done
+[ -n "$TOKEN" ] || re_usage_error "missing <token>."
+[ "$TOKEN" != "-" ] || TOKEN=$(cat)
+re_require openssl
+
+# Decodes base64url (what a JWT is made of) from stdin, padding it first
+base64url_decode() {
+    awk '{ gsub(/-/, "+"); gsub(/_/, "/"); gsub(/[ \t\r\n]/, ""); s = s $0 }
+         END { while (length(s) % 4) s = s "="; print s }' \
+        | openssl base64 -d -A 2>/dev/null
+}
+
+# Pretty-prints the JSON on stdin when python3 or jq is here; fails otherwise
+# (and on JSON that isn't), so the caller shows it as it came
+json_pretty() {
+    if command -v python3 >/dev/null 2>&1; then python3 -I -m json.tool 2>/dev/null
+    elif command -v jq >/dev/null 2>&1; then jq . 2>/dev/null
+    else return 1
+    fi
+}
+
+# The value of a top-level claim: a string, a number or a flat array; an
+# object is named as one rather than cut in half
+json_value() {
+    awk -v key="$1" '
+        { s = s $0 }
+        END {
+            if (!match(s, "\"" key "\"[ \t]*:[ \t]*")) exit
+            rest = substr(s, RSTART + RLENGTH)
+            c = substr(rest, 1, 1)
+            if (c == "\"") {
+                v = substr(rest, 2)
+                if (match(v, /"/)) v = substr(v, 1, RSTART - 1)
+            } else if (c == "[") {
+                if (match(rest, /\]/)) {
+                    v = substr(rest, 2, RSTART - 2)
+                    gsub(/"/, "", v); gsub(/,/, ", ", v); gsub(/  +/, " ", v)
+                }
+            } else if (c == "{") {
+                v = "(an object, see the payload above)"
+            } else {
+                v = rest
+                if (match(v, /[,}]/)) v = substr(v, 1, RSTART - 1)
+            }
+            gsub(/^[ \t]+|[ \t]+$/, "", v)
+            print v
+        }'
+}
+
+# A claim's row, when the token has that claim. Usage: row_claim JSON exp Expires
+row_claim() {
+    local V
+    V=$(printf '%s' "$1" | json_value "$2")
+    [ -z "$V" ] || re_row "$3" "$V"
+}
+
+# A time claim's row: the date and how far from now, flagged when that matters.
+# Seconds is the standard, but some issuers write milliseconds; 13 digits can
+# only be those (seconds reach 13 digits in the year 33658).
+# Usage: row_time VALUE LABEL [expired|future]
+row_time() {
+    local V="$1" LABEL="$2" FLAG="${3:-}" NOTE="" WHEN
+    case "$V" in
+        "") return 0 ;;
+        *[!0-9]*) re_row "$LABEL" "$V (not a number of seconds)"; return 0 ;;
+    esac
+    if [ "${#V}" -ge 13 ]; then V=${V%???}; NOTE=" (given in milliseconds)"; fi
+    WHEN="$(re_epoch_date "$V") ($(re_relative_time "$((V - NOW))"))$NOTE"
+    case "$FLAG" in
+        expired) if [ "$V" -le "$NOW" ]; then EXPIRED=1; WHEN="${RE_C_FAIL}$WHEN, expired${RE_C_OFF}"; fi ;;
+        future)  [ "$V" -le "$NOW" ] || WHEN="${RE_C_WARN}$WHEN, not usable yet${RE_C_OFF}" ;;
+    esac
+    re_row "$LABEL" "$WHEN"
+}
+
+# As pasted: an Authorization header, quotes, or newlines from a terminal
+TOKEN=$(printf '%s' "$TOKEN" | tr -d " \\t\\r\\n\"'" | sed 's/^[Bb]earer//')
+
+# A JWS has three parts, a JWE five; anything else isn't a token
+PARTS=$(printf '%s' "$TOKEN" | awk -F. '{ print NF }')
+IFS=. read -r B64_HEADER B64_PAYLOAD B64_SIG _ <<<"$TOKEN"
+case "$PARTS" in
+    3) ;;
+    5)  re_section "Header"
+        printf '%s' "$B64_HEADER" | base64url_decode | sed 's/^/  /'
+        echo
+        re_die "this is a JWE: its payload is encrypted, so there is nothing to read without the key." ;;
+    *)  re_die "not a JWT: expected 3 dot-separated parts, got $PARTS." ;;
+esac
+
+HEADER=$(printf '%s' "$B64_HEADER" | base64url_decode)
+PAYLOAD=$(printf '%s' "$B64_PAYLOAD" | base64url_decode)
+case "$HEADER" in *'{'*) ;; *) re_die "the header isn't JSON: is this a JWT?" ;; esac
+case "$PAYLOAD" in *'{'*) ;; *) re_die "the payload isn't JSON: is this a JWT?" ;; esac
+
+PRETTY=$(printf '%s\n' "$HEADER" | json_pretty) || PRETTY=$HEADER
+re_section "Header"
+printf '%s\n' "$PRETTY" | sed 's/^/  /'
+PRETTY=$(printf '%s\n' "$PAYLOAD" | json_pretty) || PRETTY=$PAYLOAD
+re_section "Payload"
+printf '%s\n' "$PRETTY" | sed 's/^/  /'
+
+ALG=$(printf '%s' "$HEADER" | json_value alg)
+NOW=$(date -u +%s)
+EXPIRED=""
+
+re_section "Claims"
+re_row Algorithm "${ALG:-(none stated)}"
+row_claim "$HEADER" typ Type
+row_claim "$HEADER" kid "Key ID"
+row_claim "$PAYLOAD" iss Issuer
+row_claim "$PAYLOAD" sub Subject
+row_claim "$PAYLOAD" aud Audience
+row_claim "$PAYLOAD" jti "JWT ID"
+row_claim "$PAYLOAD" scope Scope
+row_time "$(printf '%s' "$PAYLOAD" | json_value iat)" Issued
+row_time "$(printf '%s' "$PAYLOAD" | json_value nbf)" "Not before" future
+EXP=$(printf '%s' "$PAYLOAD" | json_value exp)
+if [ -n "$EXP" ]; then
+    row_time "$EXP" Expires expired
+else
+    re_row Expires "no exp claim: it never expires on its own"
+fi
+
+# The signature: its size, and whether --secret matches it
+SIG_BYTES=$(printf '%s' "$B64_SIG" | awk '{ print int(length($0) * 3 / 4) }')
+if [ -z "$B64_SIG" ] || [ "$ALG" = none ]; then
+    re_row Signature "none"
+    [ -z "$HAVE_SECRET" ] || re_warn "there is no signature for --secret to verify."
+elif [ -z "$HAVE_SECRET" ]; then
+    re_row Signature "$SIG_BYTES bytes, not verified (--secret checks an HMAC one)"
+else
+    case "$ALG" in
+        HS256) DGST=-sha256 ;;
+        HS384) DGST=-sha384 ;;
+        HS512) DGST=-sha512 ;;
+        *) re_die "--secret verifies HS256, HS384 and HS512; this token says alg=${ALG:-none} (its key is a certificate, not a secret)." ;;
+    esac
+    # The key goes in as hex, so a secret with a colon, a space or a quote in it
+    # reaches openssl as it is
+    HEXKEY=$(printf '%s' "$SECRET" | od -An -v -tx1 | tr -d ' \n')
+    WANT=$(printf '%s' "$B64_HEADER.$B64_PAYLOAD" \
+        | openssl dgst "$DGST" -mac HMAC -macopt "hexkey:$HEXKEY" -binary 2>/dev/null \
+        | openssl base64 -A 2>/dev/null | tr '+/' '-_' | tr -d '=')
+    if [ -n "$WANT" ] && [ "$WANT" = "$(printf '%s' "$B64_SIG" | tr -d '=')" ]; then
+        re_row Signature "${RE_C_OK}$SIG_BYTES bytes, verified with that secret${RE_C_OFF}"
+    else
+        re_row Signature "${RE_C_FAIL}$SIG_BYTES bytes, does NOT match that secret${RE_C_OFF}"
+        VERIFY_FAILED=1
+    fi
+fi
+
+echo
+case "$ALG" in
+    none|"") re_warn "the token says alg=${ALG:-none}: nothing signs it, so anything in the payload can be changed." ;;
+esac
+[ -z "$EXPIRED" ] || echo "This token has expired: a server that checks exp will refuse it."
+[ -z "${VERIFY_FAILED:-}" ] || exit 1

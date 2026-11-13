@@ -94,7 +94,8 @@ re_usage_error() {
     exit 1
 }
 
-# Version of this copy: its git tag (plus commits since, and -dirty), or "unknown"
+# Version of this copy: its git tag if any (plus commits since), else the commit,
+# with -dirty when edited; "unknown" outside a git checkout
 re_version() {
     local V=""
     if [ -e "$RE_EXT_HOME/.git" ] && command -v git >/dev/null 2>&1; then
@@ -214,23 +215,49 @@ re_stringx() {
 # Shortens $HOME to ~ for display
 re_tilde() { case "$1" in "$HOME"/*) echo "~${1#"$HOME"}" ;; *) echo "$1" ;; esac; }
 
-# Prints the hex digest of FILE: md5, sha1 or sha256. Uses whichever of the
-# GNU (md5sum, sha256sum), BSD/macOS (md5, shasum) or openssl tools exists.
-# Usage: re_hash md5|sha1|sha256 FILE
+# Prints the hex digest of FILE, with whichever tool this machine has: the GNU
+# ones (md5sum, sha256sum, b2sum), the BSD/macOS ones (md5, shasum), else
+# openssl; crc32 is zlib's (the one zip tools show, not cksum's), with python3.
+# Fails, printing nothing, when none of them can do ALGO, so callers can skip
+# that algorithm and say so.
+# Usage: re_hash md5|sha1|sha224|sha256|sha384|sha512|sha3-256|sha3-512|blake2b|crc32 FILE
 re_hash() {
-    local ALGO="$1" FILE="$2" N
-    case "$ALGO" in sha1) N=1 ;; sha256) N=256 ;; esac
-    if command -v "${ALGO}sum" >/dev/null 2>&1; then
-        "${ALGO}sum" "$FILE" | awk '{ print $1 }'
-    elif [ "$ALGO" = md5 ] && command -v md5 >/dev/null 2>&1; then
-        md5 -q "$FILE"
-    elif [ -n "${N:-}" ] && command -v shasum >/dev/null 2>&1; then
-        shasum -a "$N" "$FILE" | awk '{ print $1 }'
-    elif command -v openssl >/dev/null 2>&1; then
-        openssl dgst "-$ALGO" -r "$FILE" | awk '{ print $1 }'
-    else
-        return 1
-    fi
+    local ALGO="$1" FILE="$2" N="" OUT
+    case "$ALGO" in sha1) N=1 ;; sha224) N=224 ;; sha256) N=256 ;; sha384) N=384 ;; sha512) N=512 ;; esac
+    case "$ALGO" in
+        crc32)
+            command -v python3 >/dev/null 2>&1 || return 1
+            python3 -I -c 'import sys, zlib
+c = 0
+with open(sys.argv[1], "rb") as f:
+    for block in iter(lambda: f.read(1 << 20), b""):
+        c = zlib.crc32(block, c)
+print("%08x" % (c & 0xffffffff))' "$FILE" 2>/dev/null
+            return ;;
+        blake2b)
+            if command -v b2sum >/dev/null 2>&1; then
+                b2sum "$FILE" | awk '{ print $1 }'
+                return
+            fi
+            ALGO=blake2b512 ;;   # openssl's name for it
+        sha3-*|blake2*) ;;       # openssl only
+        *)
+            if command -v "${ALGO}sum" >/dev/null 2>&1; then
+                "${ALGO}sum" "$FILE" | awk '{ print $1 }'
+                return
+            elif [ "$ALGO" = md5 ] && command -v md5 >/dev/null 2>&1; then
+                md5 -q "$FILE"
+                return
+            elif [ -n "$N" ] && command -v shasum >/dev/null 2>&1; then
+                shasum -a "$N" "$FILE" | awk '{ print $1 }'
+                return
+            fi ;;
+    esac
+    command -v openssl >/dev/null 2>&1 || return 1
+    # "SHA3-256(file)= abc..." or "abc... *file", depending on the version
+    OUT=$(openssl dgst "-$ALGO" "$FILE" 2>/dev/null | awk '{ print $NF }')
+    case "$OUT" in ""|*[!0-9a-fA-F]*) return 1 ;; esac
+    echo "$OUT"
 }
 
 # Downloads URL to DEST through DEST.part, so a failed or interrupted download

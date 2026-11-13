@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Find the fingerprints of crypto algorithms (AES, SHA, ChaCha, base64, ...) in a file.
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+usage() {
+    cat <<EOF
+Usage: crypto-find [--min-confidence LEVEL] <file | dir>...
+
+Finds the crypto algorithms built into a binary by the constants they carry,
+whatever the code around them looks like: AES by its S-box, the SHA and MD5
+families by their round tables, Blowfish by the digits of pi, ChaCha by its
+"expand 32-byte k" string, SM4, CRC-32, and base64 alphabets, including the
+shuffled custom ones apps use to hide data. The table-based constants are
+found in either byte order, so the compiler's layout doesn't matter.
+
+It reads native libraries and executables (ELF, Mach-O, PE), dex files, and
+the members of an APK, JAR or other zip archive, and a directory tree of
+them. It only reads the file, it never runs it.
+
+RC4 and plain XOR have no constants, so nothing here finding them says
+nothing; and a constant is not proof the algorithm is reached, only that its
+tables are present. 'so-exports' and 'bin-triage' show what else is in the file.
+
+Options:
+  --min-confidence LEVEL  Only hits at this level or above: low, medium or high
+                          (default: low, everything)
+  -h, --help              Show this help
+
+Examples:
+  crypto-find lib/arm64-v8a/libnative-lib.so
+  crypto-find app.apk
+  crypto-find classes.dex
+EOF
+}
+
+MIN="low" INPUTS=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --min-confidence) re_need_arg "$1" "$#"; MIN="$2"; shift 2 ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
+        *)  [ -e "$1" ] || re_die "file not found: $1"
+            [ -r "$1" ] || re_die "cannot read $1 (permission denied)."
+            INPUTS+=("$1"); shift ;;
+    esac
+done
+[ "${#INPUTS[@]}" -gt 0 ] || re_usage_error "missing <file | dir>."
+case "$MIN" in low|medium|high) ;; *) re_die "--min-confidence takes low, medium or high, got: $MIN" ;; esac
+re_require python3
+
+REPORT=$(python3 -I "$RE_BINARY_DIR/libexec/cryptofind.py" "${INPUTS[@]}") \
+    || re_die "the scan failed (see above)."
+
+# One section per source, a row per algorithm, strongest confidence first.
+# Fails (for the caller's exit code) when nothing at --min was found.
+awk -F'\t' -v min="$MIN" -v warn="$RE_C_WARN" -v off="$RE_C_OFF" '
+    BEGIN { rank["high"] = 3; rank["medium"] = 2; rank["low"] = 1; floor = rank[min] }
+    rank[$3] < floor { next }
+    {
+        src = $1
+        if (src != cur) { printf "\n== %s ==\n", src; cur = src }
+        tag = ($3 == "low" ? warn "low" off : $3)
+        printf "  %-16s %s  (%s, at %s)\n", $2, $5, tag, $4
+        n++
+    }
+    END {
+        print ""
+        if (!n) { print "No crypto constants found" (min != "low" ? " at " min " confidence or above" : "") "."; exit 1 }
+        printf "%d algorithm fingerprint%s found.\n", n, (n == 1 ? "" : "s")
+        print "A fingerprint means the constants are present, not that the code reaches them."
+    }' <<<"$REPORT"

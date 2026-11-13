@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# Name the crypto and TLS libraries built into a binary, and their versions.
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+usage() {
+    cat <<EOF
+Usage: crypto-libs <file | dir>...
+
+Names the crypto and TLS libraries compiled or bundled into a binary, from
+the version banners and package names they leave in their strings: OpenSSL
+and its forks (BoringSSL, LibreSSL), mbedTLS, wolfSSL, GnuTLS, NSS, libsodium,
+Botan, Crypto++, and the Java ones in a dex (Bouncy Castle, Conscrypt, Tink,
+SQLCipher). It reports the version where the strings carry one, so you can
+tell an app's TLS stack and whether it's a long-outdated build.
+
+It reads native libraries and executables, dex files, and the .so, .dex and
+.jar members of an APK or other zip archive, and a directory tree of them. It
+reads the strings with stringx when it's installed, else binutils strings. It
+only reads the file, it never runs it.
+
+Options:
+  -h, --help  Show this help
+
+Examples:
+  crypto-libs lib/arm64-v8a/libflutter.so
+  crypto-libs app.apk
+  crypto-libs classes.dex
+EOF
+}
+
+INPUTS=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
+        *)  [ -e "$1" ] || re_die "file not found: $1"
+            [ -r "$1" ] || re_die "cannot read $1 (permission denied)."
+            INPUTS+=("$1"); shift ;;
+    esac
+done
+[ "${#INPUTS[@]}" -gt 0 ] || re_usage_error "missing <file | dir>."
+command -v stringx >/dev/null 2>&1 || re_require strings
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+# The library signatures: NAME | ERE that finds it | ERE that captures a
+# version (empty for none) | note. One pass of grep per signature over a
+# file's strings. A version is the whole matched text; the finder's match is
+# only used to know the library is there.
+SIGS='
+OpenSSL|OpenSSL [0-9]+\.[0-9]+\.[0-9]+[a-z]?|OpenSSL [0-9]+\.[0-9]+\.[0-9]+[a-z]?|
+LibreSSL|LibreSSL [0-9]|LibreSSL [0-9]+\.[0-9]+\.[0-9]+|
+BoringSSL|BoringSSL||Google'"'"'s fork, in Android system TLS; usually unversioned
+mbedTLS|mbed ?TLS [0-9]|mbed ?TLS [0-9]+\.[0-9]+\.[0-9]+|
+PolarSSL|PolarSSL [0-9]|PolarSSL [0-9]+\.[0-9]+\.[0-9]+|the old name for mbedTLS
+wolfSSL|wolfSSL [0-9]|wolfSSL [0-9]+\.[0-9]+\.[0-9]+|
+CyaSSL|CyaSSL [0-9]|CyaSSL [0-9]+\.[0-9]+\.[0-9]+|the old name for wolfSSL
+GnuTLS|GnuTLS [0-9]|GnuTLS [0-9]+\.[0-9]+\.[0-9]+|
+NSS|NSS/[0-9]|NSS/[0-9]+\.[0-9]+|Mozilla Network Security Services
+libsodium|libsodium||
+Botan|Botan [0-9]|Botan [0-9]+\.[0-9]+\.[0-9]+|
+Crypto++|Crypto\+\+ [0-9]|Crypto\+\+ [0-9]+\.[0-9]+|
+libgcrypt|Libgcrypt [0-9]|Libgcrypt [0-9]+\.[0-9]+\.[0-9]+|GnuPG'"'"'s crypto library
+GNU Nettle|GNU Nettle||
+Bouncy Castle|org[./]bouncycastle||in dex: the usual Android Java crypto provider
+Spongy Castle|org[./]spongycastle||a repackaged Bouncy Castle
+Conscrypt|org[./]conscrypt||Google'"'"'s JSSE provider (BoringSSL under it)
+Tink|com[./]google[./]crypto[./]tink||Google'"'"'s high-level crypto library
+SQLCipher|[Ss][Qq][Ll][Cc]ipher||encrypted SQLite
+'
+
+# Scans one file's strings (already in $WORK/str) and prints TSV rows:
+#   SOURCE \t NAME \t VERSIONS-or-empty \t NOTE
+scan_strings() {
+    local SOURCE="$1" NAME FIND VERRE NOTE VERS
+    printf '%s\n' "$SIGS" | while IFS='|' read -r NAME FIND VERRE NOTE; do
+        [ -n "$NAME" ] || continue
+        grep -Eq -- "$FIND" "$WORK/str" || continue
+        VERS=""
+        if [ -n "$VERRE" ]; then
+            VERS=$(grep -Eoh -- "$VERRE" "$WORK/str" | sort -u | sed 's/^[^0-9]*//' | paste -sd ', ' -)
+        fi
+        printf '%s\t%s\t%s\t%s\n' "$SOURCE" "$NAME" "$VERS" "$NOTE"
+    done
+}
+
+# Collects the rows for a file. For a zip it scans each .so/.dex/.jar member
+# rather than the container, so a compressed member is still seen (needs unzip;
+# without it, the archive's own strings, which miss the compressed members).
+collect() {
+    local F="$1" MEMBER
+    # A zip (PK\x03\x04 and the other PK.. headers), read as hex so no binary
+    # goes through a variable
+    case "$(od -An -N4 -tx1 "$F" 2>/dev/null | tr -d ' ')" in
+        504b*)
+            if command -v unzip >/dev/null 2>&1; then
+                unzip -Z1 "$F" 2>/dev/null | grep -Ei '\.(so|dex|jar)$' | while IFS= read -r MEMBER; do
+                    unzip -p "$F" "$MEMBER" >"$WORK/member" 2>/dev/null || continue
+                    re_strings_raw "$WORK/member" >"$WORK/str"
+                    scan_strings "$F!$MEMBER"
+                done
+                return
+            fi
+            re_warn "$F is a zip but unzip isn't installed, so only its own strings are scanned." ;;
+    esac
+    re_strings_raw "$F" >"$WORK/str"
+    scan_strings "$F"
+}
+
+ROWS="$WORK/rows"
+: >"$ROWS"
+for INPUT in "${INPUTS[@]}"; do
+    if [ -d "$INPUT" ]; then
+        while IFS= read -r F; do collect "$F" >>"$ROWS"; done < <(find "$INPUT" -type f | LC_ALL=C sort)
+    else
+        collect "$INPUT" >>"$ROWS"
+    fi
+done
+
+# One section per source that had a hit, a row per library
+awk -F'\t' '
+    {
+        if ($1 != cur) { printf "\n== %s ==\n", $1; cur = $1 }
+        line = $2
+        if ($3 != "") line = line "  " $3
+        if ($4 != "") line = line "  (" $4 ")"
+        print "  " line
+        n++
+    }
+    END {
+        print ""
+        if (!n) print "No known crypto or TLS library found in the strings."
+        else printf "%d library match%s. A match is a string, not proof the code is used.\n", n, (n == 1 ? "" : "es")
+    }' "$ROWS"
+
+[ -s "$ROWS" ]

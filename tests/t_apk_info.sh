@@ -75,6 +75,33 @@ expect_out "-s only applies to a package name" "-s with a file is refused"
 : >bundle.xapk
 run apk-info bundle.xapk
 expect_out "split APK bundle" "a bundle points to xapk-merger"
+# The Framework section, end to end: the fake aapt2 answers on the manifest
+# filename, so a real zip (which unzip can list) named like an APK works. Needs
+# zip to build one.
+if command -v zip >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1; then
+    fixture_apk
+    mkdir -p game/lib/armeabi-v7a game/assets
+    : >game/classes.dex; : >game/AndroidManifest.xml
+    : >game/lib/armeabi-v7a/libcocos2djs.so
+    rm -f game.apk && ( cd game && zip -qr ../game.apk . )
+    run apk-info game.apk
+    expect_rc 0 "a real APK: runs"
+    expect_out "== Framework ==" "has a Framework section of its own"
+    expect_out "Engine       Cocos2d-x" "names the engine (the libcocos2djs.so case)"
+    expect_out "Evidence     lib/armeabi-v7a/libcocos2djs.so" "...with the file it matched"
+    expect_out "== Code ==" "still has a separate Code section"
+    expect_out "libcocos2djs.so" "...listing the native library"
+
+    # A plain app: the section says so rather than going quiet
+    mkdir -p plain
+    : >plain/classes.dex; : >plain/AndroidManifest.xml
+    rm -f plain.apk && ( cd plain && zip -qr ../plain.apk . )
+    run apk-info plain.apk
+    expect_out "none detected (plain Java/Kotlin dex)" "a plain app says no framework was detected"
+else
+    skip "Framework section end to end" "zip/unzip not installed"
+fi
+
 rm "$FAKE_STATE/aapt2/AndroidManifest.xml.tree"
 run apk-info target.apk
 expect_rc 1 "an unreadable manifest fails"

@@ -52,6 +52,76 @@ lib "re_hash md5 '$T_DIR/abc'"
 expect_out "900150983cd24fb0d6963f7d28e17f72" "re_hash md5 of 'abc'"
 lib "re_hash sha1 '$T_DIR/abc'"
 expect_out "a9993e364706816aba3e25717850c26c9cd0d89d" "re_hash sha1 of 'abc'"
+lib "re_hash sha512 '$T_DIR/abc'"
+expect_out "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f" \
+    "re_hash sha512 of 'abc'"
+if command -v python3 >/dev/null 2>&1; then
+    lib "re_hash crc32 '$T_DIR/abc'"
+    expect_out "352441c2" "re_hash crc32 of 'abc' is zlib's (what zip tools show)"
+else
+    skip "re_hash crc32 of 'abc' is zlib's (what zip tools show)" "python3 not installed"
+fi
+lib "re_hash nonesuch '$T_DIR/abc' || echo unsupported"
+expect_out "unsupported" "re_hash: an algorithm no tool can do fails, printing nothing"
+if command -v openssl >/dev/null 2>&1; then
+    lib "re_hash sha3-256 '$T_DIR/abc'"
+    expect_out "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532" "re_hash sha3-256 of 'abc' (openssl)"
+else
+    skip "re_hash sha3-256 of 'abc' (openssl)" "openssl not installed"
+fi
+
+# re_relative_time rounds to the unit that reads naturally
+cry() { run bash -c ". '$REPO/modules/crypto/lib.sh'; $1"; }
+cry 're_relative_time 1799'
+expect_out "in 30 minutes" "re_relative_time: 1799 seconds rounds to 30 minutes"
+cry 're_relative_time -7205'
+expect_out "2 hours ago" "re_relative_time: a negative number is in the past"
+cry 're_relative_time 30'
+expect_out "in 30 seconds" "re_relative_time: under a minute stays in seconds"
+cry 're_relative_time -86400'
+expect_out "1 day ago" "re_relative_time: singular has no 's'"
+
+# re_apk_framework: names the engine from an APK's entry list on stdin
+fw() { run bash -c ". '$REPO/modules/android/lib.sh'; printf '%s\n' \"\$1\" | re_apk_framework" _ "$1"; }
+fw 'classes.dex
+lib/armeabi-v7a/libcocos2djs.so'
+expect_out "Cocos2d-x" "re_apk_framework: Cocos by its native lib (the case that slipped through before)"
+expect_out "libcocos2djs.so" "...showing the file it matched as evidence"
+fw 'classes.dex
+assets/bin/Data/Managed/Metadata/global-metadata.dat'
+expect_out "Unity (IL2CPP)" "re_apk_framework: Unity IL2CPP from its asset alone (so a split app is still caught)"
+fw 'classes.dex
+assets/flutter_assets/kernel_blob.bin'
+expect_out "Flutter" "re_apk_framework: Flutter from flutter_assets, no .so needed"
+fw 'assets/index.android.bundle
+lib/arm64-v8a/libhermes.so'
+expect_out "React Native" "re_apk_framework: React Native"
+expect_out "Hermes" "...noting Hermes when its lib is present"
+fw 'lib/arm64-v8a/libgodot_android.so
+assets/game.pck'
+expect_out "Godot" "re_apk_framework: Godot"
+fw 'lib/arm64-v8a/libil2cpp.so
+lib/arm64-v8a/libunity.so'
+expect_out "Unity (IL2CPP)" "re_apk_framework: IL2CPP wins over Mono when both libs are present"
+fw 'classes.dex
+res/layout/main.xml'
+expect_rc 1 "re_apk_framework: a plain app matches nothing"
+expect_eq "$OUT" "" "...and prints nothing"
+# Manifest class names catch an engine even when the native lib is renamed
+# (the real-world libgame.so case) or the files aren't listed at all
+fw 'classes.dex
+lib/arm64-v8a/libgame.so
+org.cocos2dx.lua.AppActivity'
+expect_out "Cocos2d-x" "re_apk_framework: Cocos by its manifest class, despite a renamed libgame.so"
+expect_out "org.cocos2dx.lua.AppActivity" "...showing the class as evidence"
+fw 'com.unity3d.player.UnityPlayerActivity'
+expect_out "Unity" "re_apk_framework: Unity by its player class, no files needed"
+fw 'io.flutter.embedding.android.FlutterActivity'
+expect_out "Flutter" "re_apk_framework: Flutter by its manifest class"
+fw 'mono.MonoRuntimeProvider'
+expect_out "Xamarin" "re_apk_framework: Xamarin by its runtime provider"
+fw 'org.qtproject.qt.android.bindings.QtActivity'
+expect_out "Qt" "re_apk_framework: Qt by its activity class"
 
 fake_avd TestAvd_A
 lib 're_avd_dir TestAvd_A'

@@ -26,7 +26,9 @@ Output:
   permissions  the ones it asks for, and the ones it declares
   exported     components other apps can start, and what guards them
   deep links   the URIs its activities open
-  code         dex files, native libraries, and the framework it's built with
+  framework    the engine it's built with (Flutter, Unity, Cocos, ...), where
+               its code lives and how to get at it
+  code         dex files and native libraries
 
 Options:
   -s, --serial SERIAL  Device to pull the app from (optional with a single device)
@@ -287,6 +289,31 @@ awk -F'|' -v pkg="$PKG" -v all="$ALL" -v warn="$W" -v off="$O" -v sensitive="$SE
         else print "  Open one with: app-intent " pkg " --data '\''<URI>'\''"
     }' <<<"$RECORDS"
 
+# --- Framework ---------------------------------------------------------------
+# Detection runs on two signals: the APK's file list (needs unzip) and the
+# manifest class names (always available). The classes catch an engine even
+# when its native library is renamed or sits in a config split.
+re_section "Framework"
+FW_CLASSES=$(grep '^component|' <<<"$RECORDS" | cut -d'|' -f4)
+FW=$(printf '%s\n%s\n' "$FILES" "$FW_CLASSES" | re_apk_framework)
+if [ -n "$FW" ]; then
+    IFS=$'\t' read -r FW_ENGINE FW_EVIDENCE FW_CODE FW_EXTRACT <<<"$FW"
+    re_row Engine "$FW_ENGINE"
+    re_row Evidence "$FW_EVIDENCE"
+    re_row Code "$FW_CODE"
+    re_row Extract "$FW_EXTRACT"
+else
+    re_row Engine "none detected (plain Java/Kotlin dex)"
+fi
+if ! command -v unzip >/dev/null 2>&1; then
+    echo "  (matched on the manifest only; install unzip to also match the APK's files)"
+elif [ -z "$FILES" ]; then
+    echo "  (matched on the manifest only; could not list the APK's files)"
+elif ! grep -q '^lib/' <<<"$FILES" && [ -n "$RE_SPLITS" ]; then
+    echo "  Native libraries are in the config splits, not the base APK; an engine"
+    echo "  known only by its .so needs them (apk-pull --merge, or pass the merged APK)."
+fi
+
 # --- Code --------------------------------------------------------------------
 re_section "Code"
 if ! command -v unzip >/dev/null 2>&1; then
@@ -295,25 +322,6 @@ elif [ -z "$FILES" ]; then
     echo "  skipped (could not list the files in the APK)"
 else
     re_row Dex "$(grep -c '^classes[0-9]*\.dex$' <<<"$FILES") file(s)"
-    FRAMEWORK=""
-    has() { grep -qE "$1" <<<"$FILES"; }
-    if has '^lib/[^/]+/libflutter\.so$|^assets/flutter_assets/'; then
-        FRAMEWORK="Flutter: the app's code is Dart, compiled into lib/*/libapp.so (jadx won't show it)"
-    elif has '^assets/index\.android\.bundle$'; then
-        FRAMEWORK="React Native: the app's code is JavaScript in assets/index.android.bundle"
-        has '^lib/[^/]+/libhermes' && FRAMEWORK="$FRAMEWORK (Hermes bytecode)"
-    elif has '^lib/[^/]+/lib(monodroid|monosgen)'; then
-        FRAMEWORK="Xamarin / .NET MAUI: the app's code is .NET assemblies"
-    elif has '^lib/[^/]+/libil2cpp\.so$'; then
-        FRAMEWORK="Unity (IL2CPP): the game's code is native, in lib/*/libil2cpp.so with assets/bin/Data/Managed/Metadata/global-metadata.dat"
-    elif has '^lib/[^/]+/libunity\.so$'; then
-        FRAMEWORK="Unity (Mono): the game's code is .NET assemblies in assets/bin/Data/Managed/"
-    elif has '^assets/public/(cordova\.js|index\.html)$' && has '^assets/capacitor'; then
-        FRAMEWORK="Capacitor: the app's code is web code in assets/public/"
-    elif has '^assets/www/(cordova\.js|index\.html)$'; then
-        FRAMEWORK="Cordova: the app's code is web code in assets/www/"
-    fi
-    re_row Framework "${FRAMEWORK:-none detected (plain Java/Kotlin)}"
     ABIS=$(sed -n 's#^lib/\([^/]*\)/[^/]*\.so$#\1#p' <<<"$FILES" | sort -u | tr '\n' ' ' | sed 's/ $//')
     if [ -z "$ABIS" ]; then
         re_row Native "none${RE_SPLITS:+ in the base APK (see the config splits)}"
