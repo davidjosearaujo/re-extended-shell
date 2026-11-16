@@ -118,7 +118,8 @@ _re_androidcontainer() {
 _re_frida_server() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
-        '(-s --serial)'{-s,--serial}'[device to use]:device serial:_re_serials' \
+        '(-s --serial -n --name)'{-s,--serial}'[device to use]:device serial:_re_serials' \
+        '(-s --serial -n --name)'{-n,--name}'[running emulator to use, by AVD name]:AVD name:_re_avds' \
         '(--stop)--ssl-unpinning[spawn an app with SSL unpinning]:package:_re_packages' \
         '(--stop)*'{-l,--load}'[extra Frida script]:script:_files -g "*.js(-.)"' \
         '(--stop)--refresh[download frida-server and the scripts again]' \

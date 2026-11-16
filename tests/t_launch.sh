@@ -215,6 +215,14 @@ run frida-server --push-only
 expect_rc 0 "frida-server --push-only with the build cached"
 expect_log "push $FRIDA_DIR/frida-server-16.0.0-android-x86_64" "pushes the cached build"
 
+fake_reset; fake_emulator emulator-5554 TestAvd_A; fake_emulator emulator-5556 TestAvd_B
+run frida-server -n TestAvd_B --push-only
+expect_rc 0 "frida-server -n names an emulator by AVD name"
+expect_log "-s emulator-5556 push" "...and pushes to that emulator"
+run frida-server -s TestAvd_B -n TestAvd_A --push-only
+expect_rc 1 "-s and -n together are refused"
+fake_reset; fake_emulator emulator-5554 TestAvd_A
+
 UNPIN="$FRIDA_DIR/unpinning/main"
 mkdir -p "$UNPIN/android"
 cat >"$UNPIN/config.js" <<'JS'

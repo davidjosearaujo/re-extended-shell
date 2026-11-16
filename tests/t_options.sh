@@ -26,6 +26,7 @@ launch-emulator-wireshark -i
 apk-pull -s
 applog -s
 frida-server -s
+frida-server -n
 frida-server -l
 frida-server --ssl-unpinning
 apk-pull -o

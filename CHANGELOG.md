@@ -5,6 +5,14 @@ Every notable change to RE Extended Shell, newest first.
 `re-extended-shell --version` prints your copy's version: its release tag, plus
 the commits since it and `-dirty` when you've edited something.
 
+## Unreleased
+
+### Changed
+
+- `frida-server` takes `-n AVD_NAME` like the other emulator-aware commands: either flag
+  takes either an adb serial or an AVD name, and giving both is refused. Completions
+  offer it in bash and zsh.
+
 ## 1.0.0 — 2026-11-13
 
 The first release of the consolidated toolkit.

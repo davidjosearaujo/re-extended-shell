@@ -146,10 +146,11 @@ _re_complete_frida_server() {
     local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
     case "$prev" in
         -s|--serial)     _re_reply_words "$(_re_serials)"; return ;;
+        -n|--name)       _re_reply_words "$(_re_avds)"; return ;;
         --ssl-unpinning) _re_reply_words "$(_re_packages)"; return ;;
         -l|--load)       _re_reply_files "js"; return ;;
     esac
-    _re_reply_words "-s --serial --ssl-unpinning -l --load --refresh --push-only --stop -h --help"
+    _re_reply_words "-s --serial -n --name --ssl-unpinning -l --load --refresh --push-only --stop -h --help"
 }
 
 _re_complete_apk_pull() {
