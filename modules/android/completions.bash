@@ -105,9 +105,10 @@ _re_complete_wireshark() {
     local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
     case "$prev" in
         -s|--serial)    _re_reply_words "$(_re_serials)"; return ;;
+        -n|--name)   _re_reply_words "$(_re_avds)"; return ;;
         -i|--interface) _re_reply_words "any wlan0 eth0 lo"; return ;;
     esac
-    _re_reply_words "-s --serial -i --interface -h --help"
+    _re_reply_words "-s --serial -n --name -i --interface -h --help"
 }
 
 _re_complete_xapk_installer() {
@@ -158,12 +159,13 @@ _re_complete_apk_pull() {
     local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
     case "$prev" in
         -s|--serial)   _re_reply_words "$(_re_serials)"; return ;;
+        -n|--name)  _re_reply_words "$(_re_avds)"; return ;;
         -o|--output)   _re_reply_files "apk"; return ;;
         -k|--keystore) _re_reply_files ""; return ;;
         -p|--ks-pass|-a|--alias) COMPREPLY=(); return ;;
     esac
     if [[ "$cur" == -* ]]; then
-        _re_reply_words "-s --serial -o --output -f --force --merge -k --keystore -p --ks-pass -a --alias -h --help"
+        _re_reply_words "-s --serial -n --name -o --output -f --force --merge -k --keystore -p --ks-pass -a --alias -h --help"
     else
         _re_reply_words "$(_re_packages)"
     fi
@@ -202,9 +204,10 @@ _re_complete_applog() {
     done
     case "$prev" in
         -s|--serial) _re_reply_words "$(_re_serials)"; return ;;
+        -n|--name) _re_reply_words "$(_re_avds)"; return ;;
     esac
     if [[ "$cur" == -* ]]; then
-        _re_reply_words "-s --serial --start -h --help --"
+        _re_reply_words "-s --serial -n --name --start -h --help --"
     else
         _re_reply_words "$(_re_packages)"
     fi
@@ -214,9 +217,10 @@ _re_complete_apk_info() {
     local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
     case "$prev" in
         -s|--serial) _re_reply_words "$(_re_serials)"; return ;;
+        -n|--name) _re_reply_words "$(_re_avds)"; return ;;
     esac
     if [[ "$cur" == -* ]]; then
-        _re_reply_words "-s --serial --all -h --help"
+        _re_reply_words "-s --serial -n --name --all -h --help"
         return
     fi
     # APK files, plus the device's packages unless the word is clearly a path
@@ -231,10 +235,11 @@ _re_complete_app_data() {
     local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
     case "$prev" in
         -s|--serial)        _re_reply_words "$(_re_serials)"; return ;;
+        -n|--name)       _re_reply_words "$(_re_avds)"; return ;;
         -o|--output|--diff) _re_reply_dirs; return ;;
     esac
     if [[ "$cur" == -* ]]; then
-        _re_reply_words "-s --serial -o --output -f --force --diff -h --help"
+        _re_reply_words "-s --serial -n --name -o --output -f --force --diff -h --help"
     else
         _re_reply_words "$(_re_packages)"
     fi
@@ -245,18 +250,19 @@ _re_complete_app_intent() {
     for ((i = 1; i < COMP_CWORD; i++)); do
         case "${COMP_WORDS[i]}" in
             --) COMPREPLY=(); return ;;   # am/content arguments
-            -s|--serial|--action|--data|-e|--extra) ((i++)) ;;
+            -s|--serial|-n|--name|--action|--data|-e|--extra) ((i++)) ;;
             -*) ;;
             *) n=$((n + 1)) ;;
         esac
     done
     case "$prev" in
         -s|--serial) _re_reply_words "$(_re_serials)"; return ;;
+        -n|--name) _re_reply_words "$(_re_avds)"; return ;;
         --action) _re_reply_words "android.intent.action.VIEW android.intent.action.SEND android.intent.action.MAIN android.intent.action.BOOT_COMPLETED"; return ;;
         --data|-e|--extra) COMPREPLY=(); return ;;
     esac
     if [[ "$cur" == -* ]]; then
-        _re_reply_words "-s --serial --all --root --action --data -e --extra -h --help --"
+        _re_reply_words "-s --serial -n --name --all --root --action --data -e --extra -h --help --"
     elif [ "$n" -eq 0 ]; then
         _re_reply_words "$(_re_packages)"
     else

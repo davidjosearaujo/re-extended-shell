@@ -10,9 +10,9 @@ done
 
 usage() {
     cat <<EOF
-Usage: app-intent [-s SERIAL] [--all] <PACKAGE>
-       app-intent [-s SERIAL] [--root] [--action ACTION] [--data URI] [-e KEY=VALUE]... <PACKAGE> <COMPONENT> [-- ARGS...]
-       app-intent [-s SERIAL] [--action ACTION] --data URI <PACKAGE>
+Usage: app-intent [-s SERIAL | -n AVD_NAME] [--all] <PACKAGE>
+       app-intent [-s SERIAL | -n AVD_NAME] [--root] [--action ACTION] [--data URI] [-e KEY=VALUE]... <PACKAGE> <COMPONENT> [-- ARGS...]
+       app-intent [-s SERIAL | -n AVD_NAME] [--action ACTION] --data URI <PACKAGE>
 
 With only a package, lists the components of an installed app that other apps
 can reach, numbered. With a component (its number, full name, or .ShortName),
@@ -27,6 +27,8 @@ hold a few permissions an ordinary app doesn't.
 
 Options:
   -s, --serial SERIAL    Device to use (optional with a single device)
+  -n, --name AVD_NAME    Running emulator to use, by AVD name. Either flag takes
+                         either identifier: both name one running device
   --all                  Also list the components that aren't exported
   --root                 Run as root, which also reaches components that aren't
                          exported
@@ -49,7 +51,10 @@ EOF
 SERIAL="" ALL="" ROOT="" ACTION="" DATA="" PACKAGE="" COMPONENT="" EXTRAS=() PASS=()
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        -s|--serial) re_need_arg "$1" "$#"; SERIAL="$2"; shift 2 ;;
+        -s|--serial|-n|--name)
+            re_need_arg "$1" "$#"
+            [ -z "$SERIAL" ] || re_die "pass only one of -s SERIAL or -n AVD_NAME."
+            SERIAL="$2"; shift 2 ;;
         --action)    re_need_arg "$1" "$#"; ACTION="$2"; shift 2 ;;
         --data)      re_need_arg "$1" "$#"; DATA="$2"; shift 2 ;;
         -e|--extra)

@@ -10,7 +10,7 @@ done
 
 usage() {
     cat <<EOF
-Usage: apk-pull [-s SERIAL] [-o PATH] [-f] [--merge [-k KEYSTORE [-p PASSWORD] [-a ALIAS]]] <PACKAGE>
+Usage: apk-pull [-s SERIAL | -n AVD_NAME] [-o PATH] [-f] [--merge [-k KEYSTORE [-p PASSWORD] [-a ALIAS]]] <PACKAGE>
 
 Pulls every APK of an installed app (base + splits) into ./<PACKAGE>-splits/.
 With --merge, saves a single installable APK instead: the base APK as-is if the
@@ -18,6 +18,8 @@ app has no splits, otherwise the splits merged with xapk-merger.
 
 Options:
   -s, --serial SERIAL      Device to pull from (optional with a single device)
+  -n, --name AVD_NAME      Running emulator to use, by AVD name. Either flag takes
+                           either identifier: both name one running device
   -o, --output PATH        Output directory (default: ./<PACKAGE>-splits/), or
                            with --merge the output APK (default: ./<PACKAGE>.apk)
   -f, --force              Replace an existing output
@@ -33,7 +35,10 @@ EOF
 SERIAL="" MERGE="" FORCE="" PACKAGE="" OUTPUT=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        -s|--serial) re_need_arg "$1" "$#"; SERIAL="$2"; shift 2 ;;
+        -s|--serial|-n|--name)
+            re_need_arg "$1" "$#"
+            [ -z "$SERIAL" ] || re_die "pass only one of -s SERIAL or -n AVD_NAME."
+            SERIAL="$2"; shift 2 ;;
         -o|--output) re_need_arg "$1" "$#"; OUTPUT="$2"; shift 2 ;;
         -k|--keystore|-p|--ks-pass|-a|--alias) re_need_arg "$1" "$#"; re_sign_opt "$1" "$2"; shift 2 ;;
         --merge) MERGE=1; shift ;;

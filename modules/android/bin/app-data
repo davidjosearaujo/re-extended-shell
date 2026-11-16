@@ -10,7 +10,7 @@ done
 
 usage() {
     cat <<EOF
-Usage: app-data [-s SERIAL] [-o DIR] [-f] [--diff OLD_DIR] <PACKAGE>
+Usage: app-data [-s SERIAL | -n AVD_NAME] [-o DIR] [-f] [--diff OLD_DIR] <PACKAGE>
 
 Copies an installed app's private storage off a rooted device or emulator, to
 see what it keeps and how: shared preferences, SQLite databases, files and
@@ -29,6 +29,8 @@ Output:
 
 Options:
   -s, --serial SERIAL  Device to pull from (optional with a single device)
+  -n, --name AVD_NAME  Running emulator to use, by AVD name. Either flag takes
+                       either identifier: both name one running device
   -o, --output DIR     Output directory (default: ./<PACKAGE>-data/, or with
                        --diff ./<PACKAGE>-data-<date>-<time>/)
   -f, --force          Replace an existing output
@@ -44,7 +46,10 @@ EOF
 SERIAL="" OUTPUT="" FORCE="" OLD="" PACKAGE=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        -s|--serial) re_need_arg "$1" "$#"; SERIAL="$2"; shift 2 ;;
+        -s|--serial|-n|--name)
+            re_need_arg "$1" "$#"
+            [ -z "$SERIAL" ] || re_die "pass only one of -s SERIAL or -n AVD_NAME."
+            SERIAL="$2"; shift 2 ;;
         -o|--output) re_need_arg "$1" "$#"; OUTPUT="$2"; shift 2 ;;
         --diff)      re_need_arg "$1" "$#"; OLD="$2"; shift 2 ;;
         -f|--force) FORCE=1; shift ;;

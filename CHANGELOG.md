@@ -9,9 +9,12 @@ the commits since it and `-dirty` when you've edited something.
 
 ### Changed
 
-- `frida-server` and `device-proxy` take `-n AVD_NAME` like the other emulator-aware
-  commands: either flag takes either an adb serial or an AVD name, and giving both is
-  refused. Completions offer it in bash and zsh.
+- Every command that takes `-s SERIAL` to pick a device (all but `release-device`, which
+  only works on a physical device, and `launch-emulator`, which takes the AVD as its
+  argument) now also takes `-n AVD_NAME`, like `reset-emulator` and `xapk-installer`:
+  `frida-server`, `device-proxy`, `apk-pull`, `apk-info`, `app-data`, `app-intent`,
+  `applog` and `launch-emulator-wireshark`. Either flag takes either an adb serial or an
+  AVD name, and giving both is refused. Completions offer it in bash and zsh.
 
 ## 1.0.0 — 2026-11-13
 

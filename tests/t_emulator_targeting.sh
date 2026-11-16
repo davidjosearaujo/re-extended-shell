@@ -158,4 +158,18 @@ dup_setup; run kill-emulator -f emulator-5556
 expect_rc 1 "kill-emulator --force refuses to guess between their processes"
 expect_out "stop it without --force" "...and says what to do instead"
 
+# -n on every command that picks a device: names the emulator, and never together with -s
+fake_reset; fake_emulator emulator-5554 TestAvd_A; fake_emulator emulator-5556 TestAvd_B
+for CMD in apk-pull apk-info app-data app-intent applog; do
+    run "$CMD" -s emulator-5554 -n TestAvd_A com.example.app
+    expect_rc 1 "$CMD refuses -s with -n"
+    expect_out "pass only one of -s SERIAL or -n AVD_NAME" "...and says so"
+    run "$CMD" -n Nope com.example.app
+    expect_rc 1 "$CMD -n with an unknown AVD fails"
+done
+run launch-emulator-wireshark -s emulator-5554 -n TestAvd_A
+expect_rc 1 "launch-emulator-wireshark refuses -s with -n"
+run applog -n TestAvd_B com.example.app
+expect_log "-s emulator-5556" "applog -n picks the emulator running that AVD"
+
 done_testing

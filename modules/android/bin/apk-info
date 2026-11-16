@@ -11,7 +11,7 @@ done
 usage() {
     cat <<EOF
 Usage: apk-info [--all] <file.apk>
-       apk-info [-s SERIAL] [--all] <PACKAGE>
+       apk-info [-s SERIAL | -n AVD_NAME] [--all] <PACKAGE>
 
 A static first look at an app, read from its manifest and APK without
 decompiling it: what other apps can reach, the flags that weaken it, how it
@@ -32,6 +32,8 @@ Output:
 
 Options:
   -s, --serial SERIAL  Device to pull the app from (optional with a single device)
+  -n, --name AVD_NAME  Running emulator to use, by AVD name. Either flag takes
+                       either identifier: both name one running device
   --all                Also list the components that aren't exported
   -h, --help           Show this help
 
@@ -44,7 +46,10 @@ EOF
 SERIAL="" ALL="" TARGET="" RE_SPLITS=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        -s|--serial) re_need_arg "$1" "$#"; SERIAL="$2"; shift 2 ;;
+        -s|--serial|-n|--name)
+            re_need_arg "$1" "$#"
+            [ -z "$SERIAL" ] || re_die "pass only one of -s SERIAL or -n AVD_NAME."
+            SERIAL="$2"; shift 2 ;;
         --all) ALL=1; shift ;;
         -h|--help) re_help; exit 0 ;;
         -*) re_unknown_option "$1" ;;

@@ -86,7 +86,8 @@ _re_release_device() {
 _re_wireshark() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
-        '(-s --serial)'{-s,--serial}'[device to capture from]:device serial:_re_serials' \
+        '(-s --serial -n --name)'{-s,--serial}'[device to capture from]:device serial:_re_serials' \
+        '(-s --serial -n --name)'{-n,--name}'[running emulator to use, by AVD name]:AVD name:_re_avds' \
         '(-i --interface)'{-i,--interface}'[device interface]:interface:(any wlan0 eth0 lo)'
 }
 
@@ -131,7 +132,8 @@ _re_frida_server() {
 _re_apk_pull() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
-        '(-s --serial)'{-s,--serial}'[device to pull from]:device serial:_re_serials' \
+        '(-s --serial -n --name)'{-s,--serial}'[device to pull from]:device serial:_re_serials' \
+        '(-s --serial -n --name)'{-n,--name}'[running emulator to use, by AVD name]:AVD name:_re_avds' \
         '(-o --output)'{-o,--output}'[output directory, or APK with --merge]:output:_files' \
         '(-f --force)'{-f,--force}'[replace an existing output]' \
         '--merge[save a single merged APK]' \
@@ -167,7 +169,8 @@ _re_apk_patch() {
 _re_applog() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
-        '(-s --serial)'{-s,--serial}'[device to use]:device serial:_re_serials' \
+        '(-s --serial -n --name)'{-s,--serial}'[device to use]:device serial:_re_serials' \
+        '(-s --serial -n --name)'{-n,--name}'[running emulator to use, by AVD name]:AVD name:_re_avds' \
         '--start[force-stop and launch the app first]' \
         '1:package:_re_packages' \
         '*::logcat argument: '
@@ -180,7 +183,8 @@ _re_apk_or_package() {
 _re_apk_info() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
-        '(-s --serial)'{-s,--serial}'[device to pull the app from]:device serial:_re_serials' \
+        '(-s --serial -n --name)'{-s,--serial}'[device to pull the app from]:device serial:_re_serials' \
+        '(-s --serial -n --name)'{-n,--name}'[running emulator to use, by AVD name]:AVD name:_re_avds' \
         '--all[also list components that are not exported]' \
         '1:APK file or package:_re_apk_or_package'
 }
@@ -188,7 +192,8 @@ _re_apk_info() {
 _re_app_data() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
-        '(-s --serial)'{-s,--serial}'[device to pull from]:device serial:_re_serials' \
+        '(-s --serial -n --name)'{-s,--serial}'[device to pull from]:device serial:_re_serials' \
+        '(-s --serial -n --name)'{-n,--name}'[running emulator to use, by AVD name]:AVD name:_re_avds' \
         '(-o --output)'{-o,--output}'[output directory]:directory:_files -/' \
         '(-f --force)'{-f,--force}'[replace an existing output]' \
         '--diff[show what changed since an earlier copy]:earlier copy:_files -/' \
@@ -198,7 +203,8 @@ _re_app_data() {
 _re_app_intent() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
-        '(-s --serial)'{-s,--serial}'[device to use]:device serial:_re_serials' \
+        '(-s --serial -n --name)'{-s,--serial}'[device to use]:device serial:_re_serials' \
+        '(-s --serial -n --name)'{-n,--name}'[running emulator to use, by AVD name]:AVD name:_re_avds' \
         '--all[also list components that are not exported]' \
         '--root[run as root, reaching components that are not exported]' \
         '--action[intent action]:action:(android.intent.action.VIEW android.intent.action.SEND android.intent.action.MAIN android.intent.action.BOOT_COMPLETED)' \

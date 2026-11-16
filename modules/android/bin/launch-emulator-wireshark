@@ -10,13 +10,15 @@ done
 
 usage() {
     cat <<EOF
-Usage: launch-emulator-wireshark [-s SERIAL] [-i INTERFACE]
+Usage: launch-emulator-wireshark [-s SERIAL | -n AVD_NAME] [-i INTERFACE]
 
 Streams tcpdump from the device into a local Wireshark window. Needs root on
 the device (runs 'adb root' if needed, or uses su) and a tcpdump binary on it.
 
 Options:
   -s, --serial SERIAL        Device to capture from (optional with a single device)
+  -n, --name AVD_NAME        Running emulator to use, by AVD name. Either flag takes
+                             either identifier: both name one running device
   -i, --interface INTERFACE  Device interface to capture on (default: any)
   -h, --help                 Show this help
 EOF
@@ -25,7 +27,10 @@ EOF
 SERIAL="" IFACE="any"
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        -s|--serial) re_need_arg "$1" "$#"; SERIAL="$2"; shift 2 ;;
+        -s|--serial|-n|--name)
+            re_need_arg "$1" "$#"
+            [ -z "$SERIAL" ] || re_die "pass only one of -s SERIAL or -n AVD_NAME."
+            SERIAL="$2"; shift 2 ;;
         -i|--interface) re_need_arg "$1" "$#"; IFACE="$2"; shift 2 ;;
         -h|--help) re_help; exit 0 ;;
         -*) re_unknown_option "$1" ;;
