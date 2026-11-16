@@ -89,6 +89,12 @@ expect_out "launch-emulator -d -s PHONE123" "...with the command to run instead"
 run device-proxy -s TestAvd_A status
 expect_rc 0 "device-proxy -s takes an AVD name"
 expect_out "is an AVD name, taking the emulator running it (emulator-5554)" "...says which emulator it took"
+run device-proxy -n TestAvd_A status
+expect_rc 0 "device-proxy -n takes an AVD name"
+run device-proxy -n emulator-5554 status
+expect_rc 0 "...and an emulator serial"
+run device-proxy -s emulator-5554 -n TestAvd_A status
+expect_rc 1 "device-proxy with both -s and -n is refused"
 run device-proxy -s Idle_Avd status
 expect_rc 1 "...but not an AVD that isn't running"
 expect_out "no emulator is running it" "...saying exactly that"

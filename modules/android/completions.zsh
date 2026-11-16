@@ -62,7 +62,8 @@ _re_kill_emulator() {
 _re_device_proxy() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
-        '(-s --serial)'{-s,--serial}'[device to use]:device serial:_re_serials' \
+        '(-s --serial -n --name)'{-s,--serial}'[device to use]:device serial:_re_serials' \
+        '(-s --serial -n --name)'{-n,--name}'[running emulator to use, by AVD name]:AVD name:_re_avds' \
         '1:action:(on off status)'
 }
 

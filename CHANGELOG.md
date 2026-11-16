@@ -9,9 +9,9 @@ the commits since it and `-dirty` when you've edited something.
 
 ### Changed
 
-- `frida-server` takes `-n AVD_NAME` like the other emulator-aware commands: either flag
-  takes either an adb serial or an AVD name, and giving both is refused. Completions
-  offer it in bash and zsh.
+- `frida-server` and `device-proxy` take `-n AVD_NAME` like the other emulator-aware
+  commands: either flag takes either an adb serial or an AVD name, and giving both is
+  refused. Completions offer it in bash and zsh.
 
 ## 1.0.0 — 2026-11-13
 

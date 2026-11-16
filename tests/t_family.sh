@@ -117,6 +117,6 @@ expect_out "Usage: apk-patch" "...shows the Usage line"
 expect_out "Run 'apk-patch --help' for details." "...and points to --help"
 expect_no_out "Options:" "...without the whole help"
 run device-proxy on PHONE
-expect_out "unexpected argument: PHONE (name the device with -s SERIAL)" "an unexpected argument can carry a hint"
+expect_out "unexpected argument: PHONE (name the device with -s SERIAL or -n AVD_NAME)" "an unexpected argument can carry a hint"
 
 done_testing

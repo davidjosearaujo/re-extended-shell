@@ -38,6 +38,7 @@ reset-emulator --snapshot
 reset-emulator -s
 reset-emulator -n
 device-proxy -s
+device-proxy -n
 release-device -s
 launch-emulator -s
 bin-triage -n

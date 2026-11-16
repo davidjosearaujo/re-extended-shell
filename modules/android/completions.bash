@@ -79,12 +79,13 @@ _re_complete_device_proxy() {
     local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]} i seen=""
     case "$prev" in
         -s|--serial) _re_reply_words "$(_re_serials)"; return ;;
+        -n|--name)   _re_reply_words "$(_re_avds)"; return ;;
     esac
     for ((i = 1; i < COMP_CWORD; i++)); do
         case "${COMP_WORDS[i]}" in on|off|status) seen=1 ;; esac
     done
     if [[ "$cur" == -* ]]; then
-        _re_reply_words "-s --serial -h --help"
+        _re_reply_words "-s --serial -n --name -h --help"
     elif [ -z "$seen" ]; then
         _re_reply_words "on off status"
     else

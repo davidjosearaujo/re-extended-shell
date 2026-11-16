@@ -10,7 +10,7 @@ done
 
 usage() {
     cat <<EOF
-Usage: device-proxy [-s SERIAL] on|off|status
+Usage: device-proxy [-s SERIAL | -n AVD_NAME] on|off|status
 
 Switches the global HTTP proxy of a running emulator or device, pointing it at
 your intercepting proxy (ZAP, Burp, mitmproxy, ...), without a restart or a
@@ -27,6 +27,8 @@ Actions:
 
 Options:
   -s, --serial SERIAL  Device to use (optional with a single device)
+  -n, --name AVD_NAME  Running emulator to use, by AVD name. Either flag takes
+                       either identifier: both name one running device
   -h, --help           Show this help
 EOF
 }
@@ -34,13 +36,16 @@ EOF
 ACTION="" SERIAL=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        -s|--serial) re_need_arg "$1" "$#"; SERIAL="$2"; shift 2 ;;
+        -s|--serial|-n|--name)
+            re_need_arg "$1" "$#"
+            [ -z "$SERIAL" ] || re_die "pass only one of -s SERIAL or -n AVD_NAME."
+            SERIAL="$2"; shift 2 ;;
         -h|--help) re_help; exit 0 ;;
         -*) re_unknown_option "$1" ;;
         on|off|status)
             [ -z "$ACTION" ] || re_die "only one of on, off, status."
             ACTION="$1"; shift ;;
-        *)  re_unexpected_arg "$1" "name the device with -s SERIAL" ;;
+        *)  re_unexpected_arg "$1" "name the device with -s SERIAL or -n AVD_NAME" ;;
     esac
 done
 [ -n "$ACTION" ] || re_usage_error "missing the action: on, off or status."
