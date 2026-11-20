@@ -172,4 +172,14 @@ expect_rc 1 "launch-emulator-wireshark refuses -s with -n"
 run applog -n TestAvd_B com.example.app
 expect_log "-s emulator-5556" "applog -n picks the emulator running that AVD"
 
+# Completion finds packages on the device -n names, as it does for -s
+comp() { run bash -c ". '$REPO/modules/android/completions.bash'; COMP_WORDS=($1); COMP_CWORD=\${#COMP_WORDS[@]}; _re_comp_serial"; }
+fake_reset; fake_emulator emulator-5554 TestAvd_A; fake_emulator emulator-5556 TestAvd_B
+comp "apk-pull -n TestAvd_B"
+expect_out "emulator-5556" "completion: -n AVD_NAME resolves to that emulator's serial"
+comp "apk-pull --name emulator-5554"
+expect_out "emulator-5554" "completion: -n takes a serial too"
+comp "apk-pull -s TestAvd_A"
+expect_out "emulator-5554" "completion: -s takes an AVD name too"
+
 done_testing

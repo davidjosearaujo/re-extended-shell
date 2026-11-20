@@ -26,12 +26,20 @@ _re_avd_or_emulator() {
     _describe -t serials 'emulator serial' serials
 }
 
-# Packages installed on the device given with -s (or the only one connected).
+# Packages installed on the device given with -s or -n (or the only one
+# connected); either flag takes a serial or a running emulator's AVD name.
 # Called from _arguments, which fills $opt_args.
 _re_packages() {
     local -a pkgs args
-    local serial=${opt_args[-s]:-${opt_args[--serial]}}
+    local s serial=${opt_args[-s]:-${opt_args[--serial]:-${opt_args[-n]:-${opt_args[--name]}}}}
     (( $+commands[adb] )) || return 1
+    if [[ -n $serial && "$(adb -s $serial get-state 2>/dev/null)" != device ]]; then
+        for s in ${(f)"$(adb devices 2>/dev/null | awk 'NR > 1 && $2 == "device" && $1 ~ /^emulator-/ { print $1 }')"}; do
+            if [[ "$(adb -s $s emu avd name 2>/dev/null | head -n 1 | tr -d '\r')" == $serial ]]; then
+                serial=$s; break
+            fi
+        done
+    fi
     [[ -n $serial ]] && args=(-s $serial)
     pkgs=( ${(f)"$(adb $args shell pm list packages 2>/dev/null | tr -d '\r' | sed 's/^package://')"} )
     _describe -t packages 'package' pkgs

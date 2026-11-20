@@ -21,17 +21,34 @@ _re_serials() {
     fi
 }
 
-# Value of -s/--serial earlier on the command line, if any
+# The adb serial for ID, a device serial or the AVD name of a running emulator
+# (either flag takes either). Prints ID unchanged when nothing matches.
+_re_resolve_serial() {
+    local s
+    if [ "$(adb -s "$1" get-state 2>/dev/null)" != "device" ]; then
+        for s in $(adb devices 2>/dev/null | awk 'NR > 1 && $2 == "device" && $1 ~ /^emulator-/ { print $1 }'); do
+            if [ "$(adb -s "$s" emu avd name 2>/dev/null | head -n 1 | tr -d '\r')" = "$1" ]; then
+                echo "$s"; return
+            fi
+        done
+    fi
+    echo "$1"
+}
+
+# Serial of the device given with -s/--serial or -n/--name earlier on the
+# command line, if any
 _re_comp_serial() {
     local i
     for ((i = 1; i < COMP_CWORD; i++)); do
         case "${COMP_WORDS[i]}" in
-            -s|--serial) echo "${COMP_WORDS[i+1]}"; return ;;
+            -s|--serial|-n|--name)
+                [ -n "${COMP_WORDS[i+1]:-}" ] && _re_resolve_serial "${COMP_WORDS[i+1]}"
+                return ;;
         esac
     done
 }
 
-# Packages installed on the device given with -s (or the only one connected)
+# Packages installed on the device given with -s or -n (or the only one connected)
 _re_packages() {
     command -v adb >/dev/null 2>&1 || return 0
     local serial

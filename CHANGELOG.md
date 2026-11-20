@@ -14,7 +14,8 @@ the commits since it and `-dirty` when you've edited something.
   argument) now also takes `-n AVD_NAME`, like `reset-emulator` and `xapk-installer`:
   `frida-server`, `device-proxy`, `apk-pull`, `apk-info`, `app-data`, `app-intent`,
   `applog` and `launch-emulator-wireshark`. Either flag takes either an adb serial or an
-  AVD name, and giving both is refused. Completions offer it in bash and zsh.
+  AVD name, and giving both is refused. Completions offer it in bash and zsh, and
+  complete package names from the device that either flag names.
 
 ## 1.0.0 — 2026-11-13
 
