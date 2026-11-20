@@ -37,6 +37,19 @@ _re_complete_so_exports() {
     fi
 }
 
+_re_complete_frida_hook() {
+    local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
+    case "$prev" in
+        -o|--output) _re_reply_files "js"; return ;;
+        -g|--grep|--args) COMPREPLY=(); return ;;
+    esac
+    if [[ "$cur" == -* ]]; then
+        _re_reply_words "-o --output -f --force -g --grep --args --backtrace -h --help"
+    else
+        _re_reply_files ""
+    fi
+}
+
 _re_complete_crypto_find() {
     local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
     case "$prev" in
@@ -61,5 +74,6 @@ _re_complete_crypto_libs() {
 complete -F _re_complete_bin_triage bin-triage
 complete -F _re_complete_proto_extract proto-extract
 complete -F _re_complete_so_exports so-exports
+complete -F _re_complete_frida_hook frida-hook
 complete -F _re_complete_crypto_find crypto-find
 complete -F _re_complete_crypto_libs crypto-libs

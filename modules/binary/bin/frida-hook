@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+# Write a Frida script that logs every call to a library's JNI entry points or chosen exports.
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+MAX_HOOKS=200   # more than this slows an app to a crawl, and is rarely meant
+
+usage() {
+    cat <<EOF
+Usage: frida-hook [-o FILE] [-f] [-g PATTERN] [--args N] [--backtrace] <file.so> [SYMBOL...]
+
+Writes a Frida script that hooks functions a shared library exports and logs
+every call: its arguments (as pointers, plus the text when one points to a
+readable string) and what it returns. Hooks the library's JNI entry points by
+default (the native methods an Android app calls), with their Java names; -g or
+SYMBOL names pick other exports. The script waits for the library to be loaded,
+so it works on an app spawned under Frida, and runs on Frida 16 and 17.
+
+Load it with 'frida -U -f <package> -l FILE', or with
+'frida-server --ssl-unpinning <package> -l FILE' to unpin TLS too. Edit the
+onEnter/onLeave callbacks in it to decode what the arguments really are.
+
+It only reads the library, it never runs it.
+
+Options:
+  -o, --output FILE   Where to write the script, '-' for stdout (default:
+                      ./<library>-hook.js)
+  -f, --force         Replace an existing output
+  -g, --grep PATTERN  Hook the exported functions whose name matches this
+                      extended regular expression (case-insensitive, on the
+                      demangled name), instead of the JNI entry points
+  --args N            Arguments shown per call (default: 4)
+  --backtrace         Also print where each call came from
+  -h, --help          Show this help
+
+Examples:
+  frida-hook lib/arm64-v8a/libnative-lib.so      # its JNI entry points
+  frida-hook -g 'crypt|sign|key' libfoo.so       # functions by name
+  frida-hook libfoo.so aes_encrypt aes_decrypt   # exactly these
+EOF
+}
+
+OUTPUT="" FORCE="" PATTERN="" NARGS=4 BACKTRACE=false LIB="" WANT=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -o|--output) re_need_arg "$1" "$#"; OUTPUT="$2"; shift 2 ;;
+        -f|--force) FORCE=1; shift ;;
+        -g|--grep) re_need_arg "$1" "$#"; PATTERN="$2"; shift 2 ;;
+        --args) re_need_arg "$1" "$#"; NARGS="$2"; shift 2 ;;
+        --backtrace) BACKTRACE=true; shift ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
+        *)
+            if [ -z "$LIB" ]; then
+                [ -f "$1" ] || re_die "file not found: $1"
+                [ -r "$1" ] || re_die "cannot read $1 (permission denied)."
+                LIB="$1"
+            else
+                WANT+=("$1")
+            fi
+            shift ;;
+    esac
+done
+[ -n "$LIB" ] || re_usage_error "missing <file.so>."
+case "$NARGS" in
+    ""|*[!0-9]*) re_die "--args takes a number (0 to 16)." ;;
+esac
+[ "$NARGS" -le 16 ] || re_die "--args takes a number (0 to 16)."
+[ -z "$PATTERN" ] || re_check_regex -g "$PATTERN"
+re_require_symtools
+
+NAME=$(basename -- "$LIB")
+[ -n "$OUTPUT" ] || OUTPUT="$PWD/${NAME%.so}-hook.js"
+[ "$OUTPUT" = "-" ] || re_refuse_existing "$FORCE" "$OUTPUT"
+
+# Every exported function as "MANGLED<tab>LABEL": the demangled C++ name, or
+# for a JNI entry point the Java method it implements
+FUNCS=$(re_syms "$LIB" functions)
+[ -n "$FUNCS" ] || re_die "$LIB exports no functions that can be read (stripped of its dynamic symbols, or not a shared library?)."
+TABLE=$(paste <(printf '%s\n' "$FUNCS") <(printf '%s\n' "$FUNCS" | re_demangle) | awk -F'\t' '
+    # Java_com_example_Native_check -> com.example.Native.check. In a JNI
+    # name "_1" is "_", "_2" ";", "_3" "[", "_0XXXX" a Unicode character, and
+    # "__" starts the signature of an overloaded method.
+    function java(s,   out, c, i, n) {
+        s = substr(s, 6); out = ""; n = length(s)
+        for (i = 1; i <= n; i++) {
+            c = substr(s, i, 1)
+            if (c != "_") { out = out c; continue }
+            c = substr(s, i + 1, 1)
+            if (c == "_") break
+            if (c == "1") { out = out "_"; i++ }
+            else if (c == "2") { out = out ";"; i++ }
+            else if (c == "3") { out = out "["; i++ }
+            else if (c == "0") { out = out "\\u" substr(s, i + 2, 4); i += 5 }
+            else out = out "."
+        }
+        return out
+    }
+    { print $1 "\t" ($1 ~ /^Java_/ ? java($1) : $2) }')
+TOTAL=$(grep -c . <<<"$TABLE")
+
+# What to hook: the names given, then -g's matches, else the JNI entry points
+PICKED=""
+for S in ${WANT[@]+"${WANT[@]}"}; do
+    LINE=$(awk -F'\t' -v s="$S" '$1 == s || $2 == s { print; exit }' <<<"$TABLE")
+    [ -n "$LINE" ] || re_die "$NAME exports no function '$S' (so-exports $LIB lists what it does)."
+    PICKED="$PICKED$LINE"$'\n'
+done
+if [ -n "$PATTERN" ]; then
+    MATCHED=$(awk -F'\t' '{ print $2 }' <<<"$TABLE" | grep -niE -- "$PATTERN" | cut -d: -f1 || true)
+    [ -n "$MATCHED" ] || re_die "no exported function of $NAME matches '$PATTERN' (so-exports $LIB lists them)."
+    PICKED="$PICKED$(awk 'NR == FNR { want[$1]; next } FNR in want' <(printf '%s\n' "$MATCHED") <(printf '%s\n' "$TABLE"))"$'\n'
+fi
+if [ "${#WANT[@]}" -eq 0 ] && [ -z "$PATTERN" ]; then
+    PICKED=$(grep -E '^(Java_|JNI_OnLoad)' <<<"$TABLE" || true)
+    [ -n "$PICKED" ] || re_die "$NAME has no JNI entry points: pick the functions to hook with -g PATTERN or by name ($TOTAL exported, so-exports $LIB lists them)."
+fi
+PICKED=$(printf '%s\n' "$PICKED" | awk 'NF && !seen[$0]++')
+COUNT=$(grep -c . <<<"$PICKED")
+[ "$COUNT" -le "$MAX_HOOKS" ] \
+    || re_die "$COUNT functions picked, more than $MAX_HOOKS: hooking that many slows the app to a crawl. Narrow it down with -g."
+
+# The names Frida may know the module by: the file name and its SONAME
+MODULES="'$NAME'"
+SONAME=$(re_so_module "$LIB")
+[ "$SONAME" = "$NAME" ] || MODULES="$MODULES, '$SONAME'"
+
+# One HOOKS entry per "SYMBOL<tab>LABEL" line, as JavaScript string literals
+# (names are plain, but a backslash or quote is escaped all the same)
+js_list() {
+    awk -F'\t' -v q="'" '
+        function lit(s) { gsub(/\\/, "\\\\", s); gsub(q, "\\" q, s); return q s q }
+        { printf "  [%s, %s, %s],\n", lit($1), lit($2), ($1 ~ /^Java_/ ? "true" : "false") }'
+}
+
+write_script() {
+    cat <<JS
+// Frida hooks for $NAME ($COUNT functions), written by frida-hook.
+// Load it: frida -U -f <package> -l <this file>
+//      or: frida-server --ssl-unpinning <package> -l <this file>
+// Runs on Frida 16 and 17. Each call prints its arguments and return value;
+// edit onEnter/onLeave below to decode what they really are.
+'use strict';
+
+const MODULES = [$MODULES];   // the names the library may be loaded under
+const ARGS = $NARGS;          // arguments shown per call
+const BACKTRACE = $BACKTRACE; // also print where each call came from
+
+// [symbol, label, JNI?]: a JNI function's first two arguments are the JNIEnv
+// and the Java object or class, so the ones shown start after them
+const HOOKS = [
+$(js_list <<<"$PICKED")
+];
+
+// A pointer, and the text it points to when that reads as a string
+function fmt(p) {
+  if (p.isNull()) return 'NULL';
+  let s = null;
+  try { s = p.readCString(); } catch (e) { /* not a readable address */ }
+  if (s !== null && /^[\x20-\x7e]{4,}$/.test(s)) {
+    return p + ' "' + (s.length > 80 ? s.slice(0, 80) + '...' : s) + '"';
+  }
+  return p.toString();
+}
+
+function install(mod) {
+  console.log('[*] ' + mod.name + ' loaded at ' + mod.base + ', hooking ' + HOOKS.length + ' functions');
+  for (const [sym, label, jni] of HOOKS) {
+    const addr = mod.findExportByName(sym);
+    if (addr === null) { console.log('[-] ' + label + ': not found'); continue; }
+    const first = jni ? 2 : 0;
+    Interceptor.attach(addr, {
+      onEnter(args) {
+        const shown = [];
+        for (let i = first; i < first + ARGS; i++) shown.push(fmt(args[i]));
+        console.log('[>] ' + label + '(' + shown.join(', ') + ')');
+        if (BACKTRACE) {
+          console.log('    ' + Thread.backtrace(this.context, Backtracer.ACCURATE)
+            .filter((a, i, all) => !a.isNull() && (i === 0 || !a.equals(all[i - 1])))
+            .map(a => DebugSymbol.fromAddress(a).toString()).join('\n    '));
+        }
+      },
+      onLeave(ret) {
+        console.log('[<] ' + label + ' = ' + fmt(ret));
+      }
+    });
+  }
+}
+
+function loaded() {
+  for (const name of MODULES) {
+    const m = Process.findModuleByName(name);
+    if (m !== null) return m;
+  }
+  return null;
+}
+
+// Hooks the library now if it's loaded, else as soon as it is: through a
+// module observer on Frida 17, through dlopen on Frida 16
+function whenLoaded(callback) {
+  let done = false;
+  const tryNow = () => {
+    if (done) return;
+    const m = loaded();
+    if (m !== null) { done = true; callback(m); }
+  };
+  tryNow();
+  if (done) return;
+  console.log('[*] waiting for ' + MODULES[0] + ' to be loaded...');
+  if (typeof Process.attachModuleObserver === 'function') {
+    Process.attachModuleObserver({ onAdded(m) { if (MODULES.includes(m.name)) tryNow(); } });
+    return;
+  }
+  for (const fn of ['android_dlopen_ext', 'dlopen']) {
+    const p = typeof Module.findGlobalExportByName === 'function'
+      ? Module.findGlobalExportByName(fn) : Module.findExportByName(null, fn);
+    if (p !== null) Interceptor.attach(p, { onLeave() { tryNow(); } });
+  }
+}
+
+whenLoaded(install);
+JS
+}
+
+if [ "$OUTPUT" = "-" ]; then
+    write_script
+    exit 0
+fi
+mkdir -p "$(dirname -- "$OUTPUT")" || exit 1
+write_script >"$OUTPUT" || re_die "could not write $OUTPUT."
+re_section "$NAME"
+re_row Module "$SONAME"
+re_row Hooked "$COUNT of $TOTAL exported functions"
+awk -F'\t' '{ print $2 }' <<<"$PICKED" | re_list
+echo
+echo "Frida script: $OUTPUT"
+echo "Load it with: frida -U -f <package> -l $(re_tilde "$OUTPUT")   (or frida-server --ssl-unpinning <package> -l ...)"

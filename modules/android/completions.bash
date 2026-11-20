@@ -287,6 +287,34 @@ _re_complete_app_intent() {
     fi
 }
 
+_re_complete_app_reset() {
+    local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
+    case "$prev" in
+        -s|--serial) _re_reply_words "$(_re_serials)"; return ;;
+        -n|--name) _re_reply_words "$(_re_avds)"; return ;;
+    esac
+    if [[ "$cur" == -* ]]; then
+        _re_reply_words "-s --serial -n --name --keep-data --keep-perms --grant-all --start -h --help"
+    else
+        _re_reply_words "$(_re_packages)"
+    fi
+}
+
+_re_complete_app_memdump() {
+    local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
+    case "$prev" in
+        -s|--serial) _re_reply_words "$(_re_serials)"; return ;;
+        -n|--name) _re_reply_words "$(_re_avds)"; return ;;
+        -o|--output) _re_reply_dirs; return ;;
+        -g|--grep|--process) COMPREPLY=(); return ;;
+    esac
+    if [[ "$cur" == -* ]]; then
+        _re_reply_words "-s --serial -n --name -o --output -f --force -g --grep --process --all -h --help"
+    else
+        _re_reply_words "$(_re_packages)"
+    fi
+}
+
 complete -F _re_complete_launch_emulator launch-emulator
 complete -F _re_complete_kill_emulator kill-emulator
 complete -F _re_complete_reset_emulator reset-emulator
@@ -304,3 +332,5 @@ complete -F _re_complete_applog applog
 complete -F _re_complete_apk_info apk-info
 complete -F _re_complete_app_data app-data
 complete -F _re_complete_app_intent app-intent
+complete -F _re_complete_app_reset app-reset
+complete -F _re_complete_app_memdump app-memdump

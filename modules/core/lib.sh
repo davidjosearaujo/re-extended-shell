@@ -156,6 +156,14 @@ re_refuse_existing() {
     [ ! -e "$2" ] || [ -n "$1" ] || re_die "$2 already exists (use -f to ${3:-replace it})."
 }
 
+# Dies if PATTERN isn't an extended regular expression grep can parse (it
+# exits 2 for those; 1 is just "no match"). OPTION names the flag it came in.
+# Usage: re_check_regex OPTION PATTERN
+re_check_regex() {
+    printf '' | grep -E -- "$2" >/dev/null 2>&1
+    [ "$?" != 2 ] || re_die "$1: not a valid extended regular expression: $2"
+}
+
 # Prints the command's help: its usage(), the settings it reads (from the
 # manifests, with the value set in the environment, if any), and the footer
 # every command shares.

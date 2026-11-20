@@ -29,6 +29,18 @@ _re_so_exports() {
         '*:file:_files'
 }
 
+_re_frida_hook() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '(-o --output)'{-o,--output}'[where to write the script]:script:_files -g "*.js(-.)"' \
+        '(-f --force)'{-f,--force}'[replace an existing output]' \
+        '(-g --grep)'{-g,--grep}'[hook the exported functions matching this regular expression]:pattern: ' \
+        '--args[arguments shown per call]:count: ' \
+        '--backtrace[also print where each call came from]' \
+        '1:shared library:_files' \
+        '*:symbol: '
+}
+
 _re_crypto_find() {
     _arguments -s \
         '(- *)'{-h,--help}'[show help]' \
@@ -45,5 +57,6 @@ _re_crypto_libs() {
 compdef _re_bin_triage bin-triage
 compdef _re_proto_extract proto-extract
 compdef _re_so_exports so-exports
+compdef _re_frida_hook frida-hook
 compdef _re_crypto_find crypto-find
 compdef _re_crypto_libs crypto-libs

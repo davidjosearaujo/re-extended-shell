@@ -17,8 +17,11 @@ directory is read or changed.
   with `done_testing`; `./test` counts them and fails a file that stops early.
 - `fake/adb` knows just enough: devices from `$FAKE_STATE/devices`, the proxy setting,
   `adb reverse` tunnels, emulator snapshots (directories under the AVD), and a
-  frida-server that can be pushed, started and stopped. Every call is appended to
-  `$FAKE_STATE/log`, which the tests search with `expect_log`.
+  frida-server that can be pushed, started and stopped, app pids, `dumpsys package`
+  and `pm` for permissions. Every call is appended to `$FAKE_STATE/log`, which the tests
+  search with `expect_log`.
+- `fake/py/frida.py` stands in for Frida's Python bindings: `t_app_memdump.sh` puts it in
+  a venv that a fake `frida` command runs on, as `pipx` installs frida-tools.
 
 `t_family.sh` checks that every command follows the family conventions (help layout,
 errors, summary line, completions, README entry, manifest settings), so a new command

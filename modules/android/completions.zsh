@@ -223,6 +223,31 @@ _re_app_intent() {
         '*::am argument: '
 }
 
+_re_app_reset() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '(-s --serial -n --name)'{-s,--serial}'[device to use]:device serial:_re_serials' \
+        '(-s --serial -n --name)'{-n,--name}'[running emulator to use, by AVD name]:AVD name:_re_avds' \
+        '--keep-data[keep the app data, only stop it and reset permissions]' \
+        '(--grant-all)--keep-perms[leave its runtime permissions as they are]' \
+        '(--keep-perms)--grant-all[grant every runtime permission it asks for]' \
+        '--start[launch the app afterwards]' \
+        '1:package:_re_packages'
+}
+
+_re_app_memdump() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[show help]' \
+        '(-s --serial -n --name)'{-s,--serial}'[device to use]:device serial:_re_serials' \
+        '(-s --serial -n --name)'{-n,--name}'[running emulator to use, by AVD name]:AVD name:_re_avds' \
+        '(-o --output)'{-o,--output}'[output directory]:directory:_files -/' \
+        '(-f --force)'{-f,--force}'[replace an existing output]' \
+        '(-g --grep)'{-g,--grep}'[also list the strings matching this regular expression]:pattern: ' \
+        '--process[dump this process instead of the main one]:process name: ' \
+        '--all[also dump the memory backed by system files]' \
+        '1:package:_re_packages'
+}
+
 compdef _re_launch_emulator launch-emulator
 compdef _re_kill_emulator kill-emulator
 compdef _re_reset_emulator reset-emulator
@@ -240,3 +265,5 @@ compdef _re_applog applog
 compdef _re_apk_info apk-info
 compdef _re_app_data app-data
 compdef _re_app_intent app-intent
+compdef _re_app_reset app-reset
+compdef _re_app_memdump app-memdump

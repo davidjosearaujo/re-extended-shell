@@ -77,7 +77,7 @@ else
         "No 'apt' package: install via brew/flatpak/a downloaded bin, then set JADX to its command if it isn't 'jadx' on PATH (https://github.com/skylot/jadx)."
 fi
 
-if doc_tool optional frida "frida-server" "pip install frida-tools (or pipx install frida-tools)"; then
+if doc_tool optional frida "frida-server, app-memdump" "pip install frida-tools (or pipx install frida-tools)"; then
     FRIDA_VERSION=$(frida --version 2>/dev/null | tr -d '\r')
     CACHED=""
     for F in "$RE_DATA_DIR/frida/frida-server-$FRIDA_VERSION-android-"*; do
@@ -90,6 +90,11 @@ if doc_tool optional frida "frida-server" "pip install frida-tools (or pipx inst
     fi
     if ! command -v xz >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
         doc_warn "Neither xz nor python3 found, frida-server can't unpack its download"
+    fi
+    if PY=$(re_frida_python); then
+        doc_info "Frida's Python bindings: $(re_tilde "$PY")"
+    else
+        doc_warn "Frida's Python bindings can't be imported, app-memdump needs them" "pipx install frida-tools"
     fi
 fi
 doc_tool optional scrcpy "launch-emulator -d (screen mirroring)" "https://github.com/Genymobile/scrcpy" || true

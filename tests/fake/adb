@@ -81,6 +81,19 @@ case "${1:-}" in
             *"frida-server -D"*) echo 4242 >"$S/frida-pid.$SER" ;;
             "pidof frida-server") cat "$S/frida-pid.$SER" 2>/dev/null ;;
             "kill "*) rm -f "$S/frida-pid.$SER" ;;
+            # app-memdump: an app's pid, from $FAKE_STATE/pid.<process>
+            "pidof "*) cat "$S/pid.${CMD#pidof }" 2>/dev/null ;;
+            # app-reset: dumpsys from $FAKE_STATE/dumpsys.<package>; pm clear
+            # fails when $FAKE_STATE/pm-clear-fails exists; the grant/revoke
+            # loop succeeds for every permission not in $FAKE_STATE/pm-refuses
+            "dumpsys package "*) cat "$S/dumpsys.${CMD#dumpsys package }" 2>/dev/null ;;
+            "pm clear "*)
+                if [ -f "$S/pm-clear-fails" ]; then printf 'Failed\r\n'; else printf 'Success\r\n'; fi ;;
+            "for P in "*"; do pm "*)
+                for P in $(echo "$CMD" | sed 's/^for P in \(.*\); do pm.*/\1/'); do
+                    grep -qx "$P" "$S/pm-refuses" 2>/dev/null || printf '%s\r\n' "$P"
+                done ;;
+            "am force-stop "*|"monkey "*) ;;
         esac ;;
 esac
 exit 0

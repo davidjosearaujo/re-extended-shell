@@ -57,7 +57,7 @@ if [ -n "$LIB" ]; then
     expect_eq "$(grep -c '^  JNI_OnLoad$' <<<"$OUT")" 1 "...without repeating the JNI ones"
     expect_no_out "not_exported" "leaves out what isn't exported"
     expect_out "Module       libtest.so" "prints the SONAME as the module name"
-    expect_out "Interceptor.attach(Module.getExportByName('libtest.so', 'JNI_OnLoad')" \
+    expect_out "Interceptor.attach(Process.getModuleByName('libtest.so').getExportByName('JNI_OnLoad')" \
         "ends with a Frida hook for a JNI entry point"
 
     run so-exports -g 'sign|crypt' "$LIB"

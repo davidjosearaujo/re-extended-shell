@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# Dump a running app's memory over Frida and search it for tokens, keys and passwords.
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+usage() {
+    cat <<EOF
+Usage: app-memdump [-s SERIAL | -n AVD_NAME] [-o DIR] [-f] [-g PATTERN] [--process NAME] [--all] <PACKAGE>
+
+Copies the readable memory of a running app off a rooted device or emulator,
+over Frida, to find what it only ever holds in memory: session tokens, keys,
+decrypted data, what you typed into it. Then lists the keys, tokens and
+password-like strings in it, and with -g the strings that match a pattern (a
+value you saw in the app, say). Get the app to the state you want to look at
+first (logged in, after an action), then run this.
+
+Starts frida-server if it isn't running (see frida-server). Memory backed by
+system files (libraries, the framework, fonts), the JIT's compiled code and
+kernel interfaces are left out unless --all: they hold nothing of the app's.
+Expect several hundred MiB, and a minute or so, for a typical app.
+
+Output:
+  ranges/      One file per memory range, named by its base address (offset in
+               the file + base = address); pages that can't be read are zeros
+  ranges.tsv   Each range's base, size, protection and backing file
+  strings.txt  Every string in them (ASCII and UTF-16), as "FILE: STRING"
+
+Options:
+  -s, --serial SERIAL  Device to use (optional with a single device)
+  -n, --name AVD_NAME  Running emulator to use, by AVD name. Either flag takes
+                       either identifier: both name one running device
+  -o, --output DIR     Output directory (default: ./<PACKAGE>-memdump/)
+  -f, --force          Replace an existing output
+  -g, --grep PATTERN   Also list the strings matching this extended regular
+                       expression (case-insensitive)
+  --process NAME       Dump this process instead of the app's main one, e.g.
+                       <PACKAGE>:remote for a service in its own process
+  --all                Also dump system files, compiled code and kernel interfaces
+  -h, --help           Show this help
+
+Examples:
+  app-memdump com.example.app                    # after logging in, say
+  app-memdump -g 'hunter2|4111 ?1111' com.example.app   # where a value ended up
+  grep -a -c 'Bearer ' com.example.app-memdump/strings.txt
+EOF
+}
+
+SERIAL="" OUTPUT="" FORCE="" PATTERN="" PROCESS="" ALL="" PACKAGE=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -s|--serial|-n|--name)
+            re_need_arg "$1" "$#"
+            [ -z "$SERIAL" ] || re_die "pass only one of -s SERIAL or -n AVD_NAME."
+            SERIAL="$2"; shift 2 ;;
+        -o|--output) re_need_arg "$1" "$#"; OUTPUT="$2"; shift 2 ;;
+        -f|--force) FORCE=1; shift ;;
+        -g|--grep) re_need_arg "$1" "$#"; PATTERN="$2"; shift 2 ;;
+        --process) re_need_arg "$1" "$#"; PROCESS="$2"; shift 2 ;;
+        --all) ALL=1; shift ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
+        *)
+            [ -z "$PACKAGE" ] || re_die "only one package at a time."
+            PACKAGE="$1"; shift ;;
+    esac
+done
+[ -n "$PACKAGE" ] || re_usage_error "missing <PACKAGE>."
+re_check_package_name "$PACKAGE"
+PROCESS=${PROCESS:-$PACKAGE}
+case "$PROCESS" in
+    ""|*[!A-Za-z0-9._:]*) re_die "not a valid process name: $PROCESS" ;;
+esac
+[ -z "$PATTERN" ] || re_check_regex -g "$PATTERN"
+OUTPUT=${OUTPUT:-$PWD/$PACKAGE-memdump}
+OUTPUT=${OUTPUT%/}
+re_refuse_existing "$FORCE" "$OUTPUT"
+
+re_require adb frida
+
+PY=$(re_frida_python) \
+    || re_die "can't find Frida's Python bindings (the frida CLI's Python can't 'import frida'). Install them with: pipx install frida-tools"
+
+SERIAL=$(re_pick_device "app-memdump -s" "$SERIAL") || exit 1
+re_require_package "$SERIAL" "$PACKAGE"
+PID=$(adb -s "$SERIAL" shell pidof "$PROCESS" 2>/dev/null | tr -d '\r' | awk '{ print $1 }')
+[ -n "$PID" ] || re_die "$PROCESS isn't running on $SERIAL. Start it and get it to the state you want to look at, then run this again."
+
+# frida-server does nothing if the right version already runs
+"$RE_ANDROID_DIR/bin/frida-server" -s "$SERIAL" || re_die "frida-server isn't running on $SERIAL, see above."
+
+# Written next to the output, not in a temporary folder: a dump can be large
+PART="$OUTPUT.part"
+rm -rf "$PART"
+mkdir -p "$PART" || exit 1
+trap 'rm -rf "$PART"' EXIT
+echo "Attaching to $PROCESS (pid $PID) on $SERIAL..."
+STATS=$("$PY" -I "$RE_ANDROID_DIR/libexec/memdump.py" ${ALL:+--all} "$SERIAL" "$PID" "$PART" | tail -n 1)
+read -r NRANGES BYTES UNREADABLE <<<"$STATS"
+if [ -z "${UNREADABLE:-}" ] || [ ! -d "$PART/ranges" ]; then
+    re_die "the dump failed, see above."
+fi
+
+# Every string, as "ranges/<base>.bin: STRING": stringx reads ASCII and UTF-16
+# (Java strings) in one pass; binutils strings needs one pass for each
+echo "Extracting strings..."
+(
+    cd "$PART" || exit 1
+    if ! re_stringx -R -e all -l 6: ranges; then
+        for F in ranges/*.bin; do
+            { strings -a -n 6 "$F"; strings -a -n 6 -e l "$F"; } 2>/dev/null | sed "s|^|$F: |"
+        done
+    fi
+) >"$PART/strings.txt"
+
+rm -rf "$OUTPUT"
+mv "$PART" "$OUTPUT" || exit 1
+trap - EXIT
+
+# BYTES as KiB, MiB or GiB
+human() {
+    awk -v b="$1" 'BEGIN {
+        if (b >= 1073741824) printf "%.1f GiB", b / 1073741824
+        else if (b >= 1048576) printf "%.0f MiB", b / 1048576
+        else printf "%.0f KiB", b / 1024
+    }'
+}
+
+# Each string once, where it's first seen: memory holds many copies
+# (cut at 200 characters, so one JSON blob doesn't fill the screen)
+unique() { awk '{ s = substr($0, index($0, ": ") + 2) } !seen[s]++ { print substr($0, 1, 200) }'; }
+
+re_section "$PROCESS on $SERIAL"
+re_row PID "$PID"
+re_row Ranges "$NRANGES"
+re_row Size "$(human "$BYTES")"
+[ "$UNREADABLE" = 0 ] || re_row Unreadable "$(human "$UNREADABLE") (zeros in the dump)"
+re_row Strings "$(grep -c . "$OUTPUT/strings.txt")"
+
+# stringx's key and token patterns (AWS, GitHub, Slack and Google keys, JWTs,
+# private keys), then the strings that give something named like a secret a
+# value of 6 characters or more: "refreshToken": "3_AS3q...", password=hunter2
+# (not the framework's own "token=" or "Password: " format strings)
+echo " Possible secrets"
+(
+    cd "$OUTPUT" || exit 0
+    re_stringx -R -f secrets ranges
+    grep -aiE "($RE_SECRET_WORDS|session|cookie|auth)[\"' ]*[:=][\"' ]*[^ \"',;{}()<>]{6,}|bearer [A-Za-z0-9._~+/-]{8,}|eyJ[A-Za-z0-9_-]{8,}\.eyJ" strings.txt
+) | unique | re_list 30
+
+if [ -n "$PATTERN" ]; then
+    echo " Matching '$PATTERN'"
+    grep -aiE -- "$PATTERN" "$OUTPUT/strings.txt" | unique | re_list 50
+fi
+
+echo
+echo "Saved to $OUTPUT/ (search it with: grep -a -i 'TEXT' $(re_tilde "$OUTPUT")/strings.txt)"

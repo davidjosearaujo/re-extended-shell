@@ -222,10 +222,12 @@ The helpers are documented by the comment above each one. The ones you'll reach 
 
 | Where | Helpers |
 | --- | --- |
-| `core/lib.sh` | `re_die`, `re_warn`, `re_require`, `re_need_arg`, `re_help`, `re_usage_error`, `re_unknown_option`, `re_unexpected_arg`, `re_refuse_existing`, `re_section`, `re_row`, `re_list`, `re_tilde`, `re_hash`, `re_download`, `re_version_lt`, `re_port_listening`, `re_proc_has_arg`, `re_find_gui_tool`, `re_cert_form` |
+| `core/lib.sh` | `re_die`, `re_warn`, `re_require`, `re_need_arg`, `re_help`, `re_usage_error`, `re_unknown_option`, `re_unexpected_arg`, `re_refuse_existing`, `re_check_regex`, `re_section`, `re_row`, `re_list`, `re_tilde`, `re_hash`, `re_download`, `re_version_lt`, `re_port_listening`, `re_proc_has_arg`, `re_find_gui_tool`, `re_cert_form` |
 | `core/lib.sh`, strings | `re_stringx` runs `stringx` and prints its hits as `WHERE: STRING` (it fails when `stringx` isn't installed, so fall back to `strings` or `grep`); `RE_SECRET_WORDS` is the regex for words that name a secret |
 | `core/lib.sh`, proxy | `RE_PROXY_PORT` and `RE_PROXY_CERT` are the user's intercepting proxy, whichever one it is: never name a specific proxy in code or messages. `re_warn_proxy_down`, `re_require_proxy_cert` |
 | `android/lib.sh`, devices | `re_pick_device`, `re_adb_devices`, `re_avd_dir`, `re_running_emulators`, `re_emulator_serial`, `re_boot_completed`, `re_proxy_address`, `re_proxy_off` |
+| `android/lib.sh`, Frida | `re_frida_python` prints the Python that can `import frida` (the frida CLI's own, so a pipx install works), for a `libexec/` script that uses the bindings |
+| `binary/lib.sh` | `re_syms FILE exports\|imports\|functions` lists a binary's symbols (raw, as a lookup by name needs them), `re_so_module` the name Frida finds a library by, `re_strings_raw` its strings, `re_require_symtools` dies unless `nm`, `readelf` or `objdump` is there, `re_demangle` runs `c++filt` when installed |
 | `android/lib.sh`, root | A command that needs root gets it with `ROOT=$(re_require_root "$SERIAL") \|\| exit 1` and runs commands with `re_root_shell` |
 | `android/lib.sh`, APKs | `re_pull_base_apk`, `re_find_apks`, `re_require_aapt2`, `re_apk_xmltree`; commands that read an APK's manifest use `re_manifest_records`, and awk code that reads `aapt2` output starts with `"$RE_AWK_LIB"` |
 | `lib/rc.sh` (install only) | Shell rc handling for `./install` and `./uninstall` |

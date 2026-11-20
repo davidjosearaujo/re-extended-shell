@@ -55,56 +55,14 @@ case "$LIMIT" in
     all) LIMIT=1000000 ;;
     ""|*[!0-9]*|0) re_die "-l takes a number above 0 (--all shows everything)." ;;
 esac
-if [ -n "$PATTERN" ]; then
-    # grep exits 2 for a pattern it can't parse; 1 is just "no match"
-    printf '' | grep -E -- "$PATTERN" >/dev/null 2>&1
-    [ "$?" != 2 ] || re_die "-g: not a valid extended regular expression: $PATTERN"
-fi
+[ -z "$PATTERN" ] || re_check_regex -g "$PATTERN"
 
-# Which readers this machine has, looked up once
-HAVE_NM="" HAVE_READELF="" HAVE_OBJDUMP="" HAVE_CXXFILT=""
-command -v nm >/dev/null 2>&1 && HAVE_NM=1
-command -v readelf >/dev/null 2>&1 && HAVE_READELF=1
-command -v objdump >/dev/null 2>&1 && HAVE_OBJDUMP=1
-command -v c++filt >/dev/null 2>&1 && HAVE_CXXFILT=1
-[ -n "$HAVE_NM$HAVE_READELF$HAVE_OBJDUMP" ] \
-    || re_die "none of nm, readelf or objdump is installed (binutils on Linux, the Xcode command line tools on macOS)."
-
-# C++ names as they were written, when the demangler is there
-demangle() { if [ -n "$HAVE_CXXFILT" ]; then c++filt; else cat; fi; }
+re_require_symtools
 
 # The symbol names a file defines (exports) or leaves undefined (imports), one
-# per line, sorted. Tries the GNU nm flags, then the BSD ones, then readelf and
-# objdump, so it works with either userland and whatever is installed.
+# per line, demangled and sorted
 list_syms() {
-    local F="$1" KIND="$2" OUT=""
-    if [ -n "$HAVE_NM" ]; then
-        if [ "$KIND" = exports ]; then
-            OUT=$(nm -D --defined-only "$F" 2>/dev/null)
-            [ -n "$OUT" ] || OUT=$(nm -gU "$F" 2>/dev/null)
-            [ -n "$OUT" ] || OUT=$(nm -g --defined-only "$F" 2>/dev/null)
-            # Code and data only: 'A' is a version node (ZLIB_1.2.0), which
-            # nothing can call or hook
-            OUT=$(printf '%s\n' "$OUT" | awk 'NF >= 3 && $(NF-1) ~ /^[TWDBRVGSi]$/ { print $NF }')
-        else
-            OUT=$(nm -D --undefined-only "$F" 2>/dev/null)
-            [ -n "$OUT" ] || OUT=$(nm -gu "$F" 2>/dev/null)
-            [ -n "$OUT" ] || OUT=$(nm -g --undefined-only "$F" 2>/dev/null)
-            OUT=$(printf '%s\n' "$OUT" | awk 'NF >= 2 && $(NF-1) == "U" { print $NF }')
-        fi
-    fi
-    if [ -z "$OUT" ] && [ -n "$HAVE_READELF" ]; then
-        OUT=$(readelf --wide --dyn-syms "$F" 2>/dev/null | awk -v kind="$KIND" '
-            NF >= 8 && ($5 == "GLOBAL" || $5 == "WEAK") {
-                if (kind == "exports" && $7 != "UND") print $8
-                if (kind == "imports" && $7 == "UND") print $8
-            }')
-    fi
-    if [ -z "$OUT" ] && [ "$KIND" = exports ] && [ -n "$HAVE_OBJDUMP" ]; then
-        OUT=$(objdump -T "$F" 2>/dev/null | awk 'NF > 6 && $4 != "*UND*" { print $NF }')
-    fi
-    # "0000 T name@@GLIBC_2.17" -> "name"
-    printf '%s\n' "$OUT" | awk 'NF { print $NF }' | sed 's/@@*.*$//' | demangle | LC_ALL=C sort -u | awk 'NF'
+    re_syms "$1" "$2" | re_demangle | LC_ALL=C sort -u
 }
 
 # A section of symbols, filtered by -g when given. Usage: show_list TITLE LIST
@@ -125,9 +83,7 @@ for F in "${FILES[@]}"; do
     re_row Type "$(file -bL "$F" 2>/dev/null || echo unknown)"
 
     # The name a Frida hook addresses the module by
-    MODULE=""
-    [ -z "$HAVE_READELF" ] || MODULE=$(readelf -d "$F" 2>/dev/null | awk -F'[][]' '/SONAME/ { print $2; exit }')
-    MODULE=${MODULE:-$(basename -- "$F")}
+    MODULE=$(re_so_module "$F")
     re_row Module "$MODULE"
 
     EXPORTS=$(list_syms "$F" exports)
@@ -161,8 +117,9 @@ for F in "${FILES[@]}"; do
     # A hook for the first symbol worth one, ready to paste
     if [ -n "$HOOK" ]; then
         echo
-        echo "Hook one with Frida (frida -U -f <package> -l hook.js, or frida-server --ssl-unpinning -l hook.js):"
-        echo "  Interceptor.attach(Module.getExportByName('$MODULE', '$HOOK'), {"
+        echo "Hook one with Frida (frida -U -f <package> -l hook.js, or frida-server --ssl-unpinning -l hook.js),"
+        echo "or let frida-hook write a script for all of them:"
+        echo "  Interceptor.attach(Process.getModuleByName('$MODULE').getExportByName('$HOOK'), {"
         echo "      onEnter(args) { console.log('$HOOK', args[0]); }"
         echo "  });"
     fi

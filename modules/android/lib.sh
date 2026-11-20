@@ -291,6 +291,21 @@ re_root_shell() {
     fi
 }
 
+# Prints the Python that has Frida's bindings: the one the frida CLI runs on
+# (pipx keeps it in a venv of its own), else python3. Fails if neither can
+# 'import frida'.
+re_frida_python() {
+    local PY
+    PY=$(head -n 1 "$(command -v frida 2>/dev/null)" 2>/dev/null | sed -n 's/^#![[:space:]]*//p')
+    # shellcheck disable=SC2086  # "#!/usr/bin/env python3": its words, not the line
+    set -- $PY
+    [ "${1##*/}" != env ] || shift
+    PY=${1:-}
+    case "${PY##*/}" in python*) ;; *) PY=python3 ;; esac
+    "$PY" -I -c 'import frida' >/dev/null 2>&1 || return 1
+    echo "$PY"
+}
+
 # Exits unless PACKAGE is installed on SERIAL, listing similar package names.
 # Usage: re_require_package SERIAL PACKAGE
 re_require_package() {

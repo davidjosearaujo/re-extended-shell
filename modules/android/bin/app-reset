@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# Put one app back to a fresh install: stopped, its data cleared and its runtime permissions revoked.
+# shellcheck source=../lib.sh
+_re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
+while [ -L "$_re_self" ]; do
+    _re_link=$(readlink -- "$_re_self")
+    case "$_re_link" in /*) _re_self=$_re_link ;; *) _re_self=$(dirname -- "$_re_self")/$_re_link ;; esac
+done
+. "$(dirname -- "$_re_self")/../lib.sh"
+
+usage() {
+    cat <<EOF
+Usage: app-reset [-s SERIAL | -n AVD_NAME] [--keep-data] [--keep-perms | --grant-all] [--start] <PACKAGE>
+
+Puts one app back to how it was just after installing it, without restoring a
+whole snapshot or reinstalling: force-stops it, clears its data and caches
+(internal and external storage, as 'Clear storage' in Settings does) and
+revokes the runtime permissions it was granted, so it asks for them again.
+Everything else on the device stays as it is. Needs no root, so it works on a
+phone as well as an emulator. Only the first user's data.
+
+Options:
+  -s, --serial SERIAL  Device to use (optional with a single device)
+  -n, --name AVD_NAME  Running emulator to use, by AVD name. Either flag takes
+                       either identifier: both name one running device
+  --keep-data          Keep the app's data: only stop it and reset permissions
+  --keep-perms         Leave its runtime permissions as they are
+  --grant-all          Grant every runtime permission it asks for instead, so
+                       no permission prompt gets in the way of testing
+  --start              Launch the app afterwards
+  -h, --help           Show this help
+
+Examples:
+  app-reset com.example.app                 # as if just installed
+  app-reset --grant-all --start com.example.app
+  app-reset --keep-data com.example.app     # only ask for permissions again
+EOF
+}
+
+SERIAL="" KEEP_DATA="" KEEP_PERMS="" GRANT_ALL="" START="" PACKAGE=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -s|--serial|-n|--name)
+            re_need_arg "$1" "$#"
+            [ -z "$SERIAL" ] || re_die "pass only one of -s SERIAL or -n AVD_NAME."
+            SERIAL="$2"; shift 2 ;;
+        --keep-data) KEEP_DATA=1; shift ;;
+        --keep-perms) KEEP_PERMS=1; shift ;;
+        --grant-all) GRANT_ALL=1; shift ;;
+        --start) START=1; shift ;;
+        -h|--help) re_help; exit 0 ;;
+        -*) re_unknown_option "$1" ;;
+        *)
+            [ -z "$PACKAGE" ] || re_die "only one package at a time."
+            PACKAGE="$1"; shift ;;
+    esac
+done
+[ -n "$PACKAGE" ] || re_usage_error "missing <PACKAGE>."
+re_check_package_name "$PACKAGE"
+[ -z "$KEEP_PERMS" ] || [ -z "$GRANT_ALL" ] || re_die "--keep-perms and --grant-all don't go together."
+
+re_require adb
+SERIAL=$(re_pick_device "app-reset -s" "$SERIAL") || exit 1
+re_require_package "$SERIAL" "$PACKAGE"
+ADB=(adb -s "$SERIAL")
+
+# Prints the permissions in one section of 'dumpsys package': "requested"
+# (what the manifest asks for), or "granted" (the first user's runtime
+# permissions that are granted now). One name per line.
+permissions() {
+    "${ADB[@]}" shell dumpsys package "$PACKAGE" 2>/dev/null | tr -d '\r' | awk -v want="$1" '
+        # The section that starts at a "...permissions:" header runs while
+        # its lines are indented deeper than the header
+        match($0, /^ */) && RLENGTH <= depth { sect = "" }
+        /^ *requested permissions:$/ { sect = "requested"; match($0, /^ */); depth = RLENGTH; next }
+        /^ *runtime permissions:$/ && !seen_runtime { sect = "runtime"; seen_runtime = 1; match($0, /^ */); depth = RLENGTH; next }
+        sect == "" { next }
+        {
+            name = $1; sub(/[:,].*/, "", name)
+            if (name !~ /^[A-Za-z0-9_.]+$/) next
+            if (sect == "requested" && want == "requested") print name
+            if (sect == "runtime" && want == "granted" && /granted=true/) print name
+        }' | awk '!seen[$0]++'
+}
+
+# Runs 'pm grant' or 'pm revoke' (ACTION) for each permission on stdin in one
+# device shell, and prints the ones that succeeded: the others are install-time
+# or system-fixed permissions, which pm refuses to change.
+pm_each() {
+    local ACTION="$1" LIST
+    LIST=$(tr '\n' ' ')
+    [ -n "${LIST// /}" ] || return 0
+    "${ADB[@]}" shell "for P in $LIST; do pm $ACTION $PACKAGE \$P >/dev/null 2>&1 && echo \$P; done" 2>/dev/null | tr -d '\r'
+}
+
+echo "Stopping $PACKAGE on $SERIAL..."
+"${ADB[@]}" shell am force-stop "$PACKAGE" >/dev/null 2>&1
+
+if [ -z "$KEEP_DATA" ]; then
+    echo "Clearing its data..."
+    OUT=$("${ADB[@]}" shell pm clear "$PACKAGE" 2>&1 | tr -d '\r')
+    case "$OUT" in
+        *Success*) ;;
+        *) re_die "could not clear the data of $PACKAGE: ${OUT:-no answer from pm} (a device admin app can't be cleared)." ;;
+    esac
+fi
+
+CHANGED=""
+if [ -n "$GRANT_ALL" ]; then
+    echo "Granting its runtime permissions..."
+    CHANGED=$(permissions requested | pm_each grant)
+elif [ -z "$KEEP_PERMS" ]; then
+    # Read after clearing: on most versions that already resets them, and
+    # only what's still granted is left to revoke
+    echo "Revoking its runtime permissions..."
+    CHANGED=$(permissions granted | pm_each revoke)
+fi
+
+if [ -n "$START" ]; then
+    echo "Launching $PACKAGE..."
+    "${ADB[@]}" shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 \
+        || re_warn "could not launch $PACKAGE (no launcher activity?), start it yourself."
+fi
+
+re_section "$PACKAGE on $SERIAL"
+re_row Stopped yes
+if [ -n "$KEEP_DATA" ]; then re_row Data kept; else re_row Data cleared; fi
+if [ -n "$GRANT_ALL" ]; then
+    re_row Permissions "granted $(grep -c . <<<"$CHANGED")"
+    printf '%s\n' "$CHANGED" | re_list
+elif [ -n "$KEEP_PERMS" ]; then
+    re_row Permissions kept
+else
+    re_row Permissions "reset, $(grep -c . <<<"$CHANGED") revoked"
+    printf '%s\n' "$CHANGED" | re_list
+fi

@@ -7,6 +7,25 @@ the commits since it and `-dirty` when you've edited something.
 
 ## Unreleased
 
+### Added
+
+- `app-reset <PKG>` puts one app back to a fresh install without a snapshot or a
+  reinstall: force-stops it, clears its data and revokes the runtime permissions it was
+  granted. `--grant-all` grants every one it asks for instead, so permission prompts
+  stay out of the way of testing; `--keep-data`, `--keep-perms` and `--start` adjust
+  it. Needs no root, so it works on phones too.
+- `app-memdump <PKG>` copies a running app's memory off a rooted device over Frida
+  (starting `frida-server` if needed), one file per range named by its address, plus
+  every string in it, ASCII and UTF-16. It lists the keys, tokens and password-like
+  strings the app holds, which often never reach its storage, and with `-g` the strings
+  that match a pattern. It uses frida-tools' own Python bindings, so a `pipx` install
+  works as it is.
+- `frida-hook <file.so> [SYMBOL...]` (binary module) writes a Frida script that logs
+  every call to a library's functions, arguments and return value, reading the strings
+  they point to. Hooks the JNI entry points by default, labelled with the Java method
+  each implements; `-g` or symbol names pick others. The script waits for the library
+  to load, so it works on an app spawned under Frida, and runs on Frida 16 and 17.
+
 ### Changed
 
 - Every command that takes `-s SERIAL` to pick a device (all but `release-device`, which
@@ -16,6 +35,11 @@ the commits since it and `-dirty` when you've edited something.
   `applog` and `launch-emulator-wireshark`. Either flag takes either an adb serial or an
   AVD name, and giving both is refused. Completions offer it in bash and zsh, and
   complete package names from the device that either flag names.
+
+### Fixed
+
+- The hook `so-exports` prints works on Frida 17, which dropped the static
+  `Module.getExportByName`.
 
 ## 1.0.0 — 2026-11-13
 
