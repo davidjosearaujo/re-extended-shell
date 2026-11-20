@@ -1,3 +1,4 @@
 # Personal settings and certificates, never published
 /local/
 /certs/
+__pycache__/
