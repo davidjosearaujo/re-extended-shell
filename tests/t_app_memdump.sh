@@ -5,6 +5,9 @@
 . "$(dirname -- "${BASH_SOURCE[0]}")/harness.sh"
 cd "$T_DIR" || exit 1
 
+# Stock Frida and a fixed on-device name (see t_frida.sh for the rest)
+export RE_FRIDA_SOURCE=frida RE_FRIDA_NAME=frida-server
+
 # frida-server comes from the cache, never downloaded
 FRIDA_DIR="$HOME/.local/share/re-extended-shell/frida"
 mkdir -p "$FRIDA_DIR"

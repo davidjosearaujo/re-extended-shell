@@ -56,12 +56,14 @@ if [ -n "$PROXY" ]; then
     re_proxy_off "$SERIAL" "$PROXY"
 fi
 
-# frida-server (from the frida-server command) runs out of the pushed files
-if [ -n "$("${ADB[@]}" shell "ls $RE_DEVICE_DIR/frida-server 2>/dev/null" | tr -d '\r')" ] \
+# frida-server (from the frida-server command) runs out of the pushed files,
+# under its random on-device name
+FRIDA_NAME=$(re_frida_name)
+if [ -n "$("${ADB[@]}" shell "ls $RE_DEVICE_DIR/$FRIDA_NAME 2>/dev/null" | tr -d '\r')" ] \
         && ROOT=$(re_root_mode "$SERIAL"); then
-    if [ -n "$(re_root_shell "$SERIAL" "$ROOT" "pidof frida-server" 2>/dev/null | tr -d '\r')" ]; then
+    if [ -n "$(re_root_shell "$SERIAL" "$ROOT" "pidof $FRIDA_NAME" 2>/dev/null | tr -d '\r')" ]; then
         echo "Stopping frida-server..."
-        re_root_shell "$SERIAL" "$ROOT" "kill \$(pidof frida-server)" >/dev/null 2>&1
+        re_root_shell "$SERIAL" "$ROOT" "kill \$(pidof $FRIDA_NAME)" >/dev/null 2>&1
     fi
 fi
 

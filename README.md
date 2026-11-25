@@ -205,7 +205,7 @@ still work when the new ones aren't set.
 | `reset-emulator [-s SERIAL \| -n AVD]` | Puts a running emulator back to its `re-ready` snapshot (the one `launch-emulator --snapshot` saves) without restarting it (a few seconds), dropping everything since: installed apps, app data, the proxy and CA `launch-emulator --proxy --ca` set up. With one emulator running it's picked automatically; with several, name it with `-s` (serial) or `-n` (AVD name) — either flag takes either identifier. |
 | `reset-emulator --save [-s SERIAL \| -n AVD]` | Saves the emulator's current state as the snapshot instead, so you can set up the app under test once and come back to it. `--snapshot NAME` (on either form) uses another snapshot, so you can keep several states. `--save` alone replaces the `re-ready` one that `launch-emulator --snapshot` boots from. |
 | `device-proxy [-s SERIAL \| -n AVD] on\|off\|status` | Points the global HTTP proxy at your proxy's port (`RE_PROXY_PORT`), or turns it off, on a running emulator or device without restarting it (for a physical device, the `adb reverse` tunnel too). `off` clears any global HTTP proxy. `release-device` does the same and more when you unplug a phone. |
-| `frida-server [-s SERIAL \| -n AVD]` | Downloads the frida-server build that matches your `frida --version` and the device's CPU, pushes it and starts it as root. Does nothing if that version already runs. `--push-only` stops after the push, `--stop` kills it, `--refresh` downloads again. |
+| `frida-server [-s SERIAL \| -n AVD]` | Downloads the frida-server build that matches your `frida --version` and the device's CPU, pushes it and starts it as root. Does nothing if that version already runs. By default this is the [Florida](https://github.com/Ylarod/Florida) anti-detection frida-server, which hides from the checks apps run, taken from [thelok1s/florida-zygisk](https://github.com/thelok1s/florida-zygisk) (rebuilt weekly against the latest Frida; `RE_FRIDA_SOURCE=frida` uses the stock build). It's pushed and run under a random, persisted name (`RE_FRIDA_NAME`, exported for the other commands) instead of `frida-server`, so on-device scans don't spot it. `--push-only` stops after the push, `--stop` kills it, `--refresh` downloads again and rotates the name. |
 | `frida-server --ssl-unpinning <PKG>` | Then spawns the app under Frida with [HTTP Toolkit's unpinning scripts](https://github.com/httptoolkit/frida-interception-and-unpinning): it trusts your proxy's CA (`RE_PROXY_CERT`) despite certificate pinning, and is forced through your proxy (`RE_PROXY_PORT`). `-l script.js` loads your own scripts too. |
 | `apk-pull [-s SERIAL \| -n AVD] <PKG>` | Pulls every APK of an installed app (base + splits) into `./<PKG>-splits/`. With `--merge`, saves a single installable `./<PKG>.apk` instead (merged with `xapk-merger` when the app has splits; `-k/-p/-a` sign it with your own keystore). `-o` sets the output, `-f` replaces an existing one. |
 | `apk-decompile <file.apk>` | Decompiles into `./<name>/jadx/` (Java, with [jadx](https://github.com/skylot/jadx)) and `./<name>/apktool/` (smali, manifest and resources, with [apktool](https://apktool.org)), running whichever is installed. |
@@ -247,7 +247,10 @@ apk-pull --merge com.example.app && apk-decompile com.example.app.apk
 - For emulators: a **Google APIs** system image. Google Play images don't allow `adb root`.
 - Optional, per command:
   - `frida-server`: [frida-tools](https://frida.re) (`pipx install frida-tools`), plus
-    `xz` or `python3` to unpack the download
+    `gzip`/`xz` or `python3` to unpack the download. florida-zygisk only publishes
+    a build for [some Frida versions](https://github.com/thelok1s/florida-zygisk/releases)
+    (it tracks the latest); if yours isn't among them, install a frida-tools whose version
+    it has, or set `RE_FRIDA_SOURCE=frida`
   - `apk-decompile`: jadx and/or apktool. jadx has no `apt` package (brew,
     flatpak, a release binary or a manual build); if it isn't `jadx` on your
     PATH, point `JADX` (and `JADX_GUI`) at it, arguments included
@@ -326,12 +329,15 @@ Put these in `local/env.sh`:
 | `RE_ANDROID_CONTAINER_IMAGE` | `us-docker.pkg.dev/android-emulator-268719/images/30-google-x64` |
 | `APKEDITOR_JAR` | `apkeditor` on PATH, else downloaded to `~/.local/share/re-extended-shell/apkeditor/` |
 | `JADX` / `JADX_GUI` | `jadx` / `jadx-gui` (the command `apk-decompile` runs and suggests; may carry arguments, e.g. `flatpak run com.github.skylot.jadx`) |
+| `RE_FRIDA_SOURCE` | `florida-zygisk` (the Florida anti-detection build, tracking the latest Frida); `frida` for the stock upstream build |
+| `RE_FRIDA_NAME` | a random, persisted name (the device-side name `frida-server` hides behind); set it to pin a fixed one |
 | `RE_FRIDA_UNPIN_SCRIPTS` | the five scripts above |
 | `RE_FRIDA_UNPIN_REF` | `main` |
 
 frida-server builds and the unpinning scripts are cached in
 `~/.local/share/re-extended-shell/frida/`, the APKEditor jar in
-`~/.local/share/re-extended-shell/apkeditor/`.
+`~/.local/share/re-extended-shell/apkeditor/`. The random on-device name is
+remembered in `~/.local/share/re-extended-shell/frida/server-name`.
 
 ### Notes
 

@@ -285,6 +285,44 @@ re_download() {
     fi
 }
 
+# Prints a short random token of lowercase letters and digits (8 chars, or $1),
+# always starting with a letter so it's a valid file name and process name
+# everywhere. Uses /dev/urandom when it can, else an awk PRNG seeded from the
+# clock and the pid.
+re_rand_token() {
+    local N="${1:-8}" TOK=""
+    if [ -r /dev/urandom ]; then
+        TOK=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom 2>/dev/null | head -c "$N")
+    fi
+    if [ "${#TOK}" -lt "$N" ]; then
+        TOK=$(awk -v n="$N" -v seed="$$${RANDOM:-0}$(date +%s 2>/dev/null)" 'BEGIN {
+            srand(seed); c = "abcdefghijklmnopqrstuvwxyz0123456789"; s = ""
+            for (i = 0; i < n; i++) s = s substr(c, int(rand() * 36) + 1, 1)
+            print s }')
+    fi
+    case "$TOK" in [0-9]*) TOK="a${TOK#?}" ;; esac
+    printf '%s\n' "$TOK"
+}
+
+# Decompress SRC into DEST. EXT ($3) is 'xz' or 'gz'. Prefers the command-line
+# tool, falling back to Python (stock macOS has no 'xz', but Frida needs
+# Python). Usage: re_decompress FILE.xz OUT xz
+re_decompress() {
+    local SRC="$1" DEST="$2" EXT="$3"
+    case "$EXT" in
+        xz) command -v xz   >/dev/null 2>&1 && { xz -dc   "$SRC" >"$DEST"; return; } ;;
+        gz) command -v gzip >/dev/null 2>&1 && { gzip -dc "$SRC" >"$DEST"; return; } ;;
+        *)  return 1 ;;
+    esac
+    command -v python3 >/dev/null 2>&1 || return 1
+    case "$EXT" in
+        xz) python3 -I -c 'import lzma as m, shutil, sys
+with m.open(sys.argv[1]) as s, open(sys.argv[2], "wb") as d: shutil.copyfileobj(s, d)' "$SRC" "$DEST" ;;
+        gz) python3 -I -c 'import gzip as m, shutil, sys
+with m.open(sys.argv[1]) as s, open(sys.argv[2], "wb") as d: shutil.copyfileobj(s, d)' "$SRC" "$DEST" ;;
+    esac
+}
+
 # Succeeds if something listens on TCP port $1 on this machine.
 re_port_listening() {
     if command -v ss >/dev/null 2>&1; then

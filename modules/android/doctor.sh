@@ -80,15 +80,18 @@ fi
 if doc_tool optional frida "frida-server, app-memdump" "pip install frida-tools (or pipx install frida-tools)"; then
     FRIDA_VERSION=$(frida --version 2>/dev/null | tr -d '\r')
     CACHED=""
-    for F in "$RE_DATA_DIR/frida/frida-server-$FRIDA_VERSION-android-"*; do
+    for F in "$RE_DATA_DIR/frida/$RE_FRIDA_SOURCE-server-$FRIDA_VERSION-android-"*; do
         [ -f "$F" ] && CACHED="$CACHED ${F##*-android-}"
     done
     if [ -n "$CACHED" ]; then
-        doc_info "Frida $FRIDA_VERSION, frida-server cached for:$CACHED"
+        doc_info "Frida $FRIDA_VERSION, $RE_FRIDA_SOURCE-server cached for:$CACHED"
     else
-        doc_info "Frida $FRIDA_VERSION (frida-server downloads its matching build on first use)"
+        doc_info "Frida $FRIDA_VERSION (frida-server downloads its matching $RE_FRIDA_SOURCE build on first use)"
     fi
-    if ! command -v xz >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+    doc_info "frida-server source: $RE_FRIDA_SOURCE$([ "$RE_FRIDA_SOURCE" = frida ] || echo ' (Florida, anti-detection)'), on-device name: $(re_frida_name)"
+    if [ "$RE_FRIDA_SOURCE" = florida ] && ! command -v gzip >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+        doc_warn "Neither gzip nor python3 found, frida-server can't unpack its Florida download"
+    elif [ "$RE_FRIDA_SOURCE" = frida ] && ! command -v xz >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
         doc_warn "Neither xz nor python3 found, frida-server can't unpack its download"
     fi
     if PY=$(re_frida_python); then
@@ -150,6 +153,7 @@ if ! command -v adb >/dev/null 2>&1; then
     doc_info "Skipped (no adb)"
 else
     ANY_DEVICE=""
+    FNAME=$(re_frida_name)   # the random name frida-server is pushed under
     while read -r SERIAL STATE _; do
         [ -n "$SERIAL" ] || continue
         ANY_DEVICE=1
@@ -165,11 +169,12 @@ else
         INFO=$(adb -s "$SERIAL" shell 'echo "$(getprop ro.product.model)"; echo "$(getprop ro.build.version.release)";
             echo "$(getprop ro.build.version.sdk)"; echo "$(getprop ro.product.cpu.abi)"; echo "$(getprop ro.build.type)";
             echo "$(id -u)"; command -v su >/dev/null 2>&1 && echo su || echo; echo "$(settings get global http_proxy)";
-            echo "$(pidof frida-server)"; echo "$(cat '"$RE_DEVICE_DIR"'/frida-server.version 2>/dev/null)"' 2>/dev/null | tr -d '\r')
+            echo "$(pidof '"$FNAME"')"; echo "$(cat '"$RE_DEVICE_DIR"'/'"$FNAME"'.version 2>/dev/null)"' 2>/dev/null | tr -d '\r')
         {
             IFS= read -r MODEL; IFS= read -r RELEASE; IFS= read -r SDK; IFS= read -r DABI; IFS= read -r BUILD
             IFS= read -r UID_; IFS= read -r HAS_SU; IFS= read -r PROXY; IFS= read -r FRIDA_PID; IFS= read -r FRIDA_VER
         } <<<"$INFO"
+        FRIDA_VER=${FRIDA_VER%% *}   # the marker is "<version> <source>"
         if [ "$UID_" = 0 ]; then ROOT="root (adbd)"
         elif [ -n "$HAS_SU" ]; then ROOT="root via su"
         elif [ "$BUILD" = userdebug ] || [ "$BUILD" = eng ]; then ROOT="no root yet ('adb root' should work)"

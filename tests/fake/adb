@@ -75,14 +75,25 @@ case "${1:-}" in
             # release-device: lists the pushed CA, then deletes the folder
             "ls /data/local/tmp/re-ext/*.0 "*"rm -rf /data/local/tmp/re-ext") cat "$S/ca.$SER" 2>/dev/null; rm -f "$S/ca.$SER" ;;
             "pm path "*) printf 'package:/data/app/fake/base.apk\r\n' ;;
-            # frida-server: pushed (with its version file), started, found by pidof, killed
-            *"frida-server.version'"*"echo "*) echo "$CMD" | sed 's/.*echo \([^ ]*\) >.*/\1/' >"$S/frida-version.$SER" ;;
-            *"frida-server.version"*"cat "*) cat "$S/frida-version.$SER" 2>/dev/null ;;
-            *"frida-server -D"*) echo 4242 >"$S/frida-pid.$SER" ;;
-            "pidof frida-server") cat "$S/frida-pid.$SER" 2>/dev/null ;;
+            # frida-server: pushed (with its <name>.version marker "<ver> <src>"),
+            # started with '<path> -D', found by pidof <name>, killed. The
+            # on-device name is random, so match on the shape and remember the
+            # started name. The marker is written with 'echo '<ver> <src>' >' and
+            # read back with 'cat ...version'.
+            *"echo '"*"' > "*".version'") printf '%s' "$CMD" | sed "s/.*echo '\(.*\)' > .*/\1/" >"$S/frida-version.$SER" ;;
+            *"] && cat '"*".version'") cat "$S/frida-version.$SER" 2>/dev/null ;;
+            *"/data/local/tmp/re-ext/"*" -D"*)
+                echo "$CMD" | sed -n 's#.*/data/local/tmp/re-ext/\([^ /]*\) -D.*#\1#p' >"$S/frida-name.$SER"
+                echo 4242 >"$S/frida-pid.$SER" ;;
             "kill "*) rm -f "$S/frida-pid.$SER" ;;
-            # app-memdump: an app's pid, from $FAKE_STATE/pid.<process>
-            "pidof "*) cat "$S/pid.${CMD#pidof }" 2>/dev/null ;;
+            # pidof <name>: the running frida-server, else an app's pid from
+            # $FAKE_STATE/pid.<process> (app-memdump, app-intent)
+            "pidof "*)
+                if [ "${CMD#pidof }" = "$(cat "$S/frida-name.$SER" 2>/dev/null)" ]; then
+                    cat "$S/frida-pid.$SER" 2>/dev/null
+                else
+                    cat "$S/pid.${CMD#pidof }" 2>/dev/null
+                fi ;;
             # app-reset: dumpsys from $FAKE_STATE/dumpsys.<package>; pm clear
             # fails when $FAKE_STATE/pm-clear-fails exists; the grant/revoke
             # loop succeeds for every permission not in $FAKE_STATE/pm-refuses

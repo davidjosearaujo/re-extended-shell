@@ -15,6 +15,46 @@ RE_DEVICE_DIR="/data/local/tmp/re-ext"   # where files get pushed on the device
 # shellcheck disable=SC2034  # used by the scripts that source this file
 RE_APKEDITOR_DL="$RE_DATA_DIR/apkeditor/APKEditor.jar"   # xapk-merger's download
 
+# Which build of frida-server to push:
+#   florida-zygisk (default) - the Florida anti-detection build, which hides the
+#       server from the pinning and anti-Frida checks apps run, taken from
+#       thelok1s/florida-zygisk, whose CI rebuilds it weekly against the latest
+#       Frida (we use its plain server binary, not the Magisk module)
+#   frida - the stock upstream build
+# florida-zygisk only publishes a build for some Frida versions, so if yours
+# isn't there, frida-server says so and 'frida' is the way out.
+# shellcheck disable=SC2034  # used by the scripts that source this file
+RE_FRIDA_SOURCE="${RE_FRIDA_SOURCE:-florida-zygisk}"
+# Where the random on-device name (below) is remembered, under the cache dir.
+# shellcheck disable=SC2034  # used by the scripts that source this file
+RE_FRIDA_NAME_FILE="$RE_DATA_DIR/frida/server-name"
+
+# The name frida-server is pushed and run under on the device. A fixed
+# "frida-server" is trivially spotted by anti-Frida checks that scan the
+# process list and /data/local/tmp, so instead we use a random, innocuous name,
+# persisted in RE_FRIDA_NAME_FILE so every command (and later shells) agree on
+# it, and rotated by 'frida-server --refresh'. Pin one by exporting
+# RE_FRIDA_NAME yourself; android/env.sh exports the persisted value so you can
+# read it, marking it _RE_FRIDA_NAME_AUTO so that auto-export doesn't count as a
+# pin here and a rotation still takes effect in the same shell.
+re_frida_name() {
+    if [ -n "${RE_FRIDA_NAME:-}" ] && [ -z "${_RE_FRIDA_NAME_AUTO:-}" ]; then
+        printf '%s\n' "$RE_FRIDA_NAME"; return 0
+    fi
+    [ -s "$RE_FRIDA_NAME_FILE" ] || re_frida_name_reset >/dev/null || return 1
+    cat "$RE_FRIDA_NAME_FILE"
+}
+
+# Generate, persist and print a fresh random name. Used on first use and, to
+# rotate, by 'frida-server --refresh'.
+re_frida_name_reset() {
+    local NAME
+    NAME=$(re_rand_token) || return 1
+    mkdir -p "$(dirname -- "$RE_FRIDA_NAME_FILE")" || return 1
+    printf '%s\n' "$NAME" >"$RE_FRIDA_NAME_FILE" || return 1
+    printf '%s\n' "$NAME"
+}
+
 # Signing options of the commands that re-sign an APK: -k/-p/-a set these
 # (use re_sign_opt in the option loop), the defaults mean the debug keystore.
 # shellcheck disable=SC2034  # used by the scripts that source this file

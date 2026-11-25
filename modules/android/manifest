@@ -11,5 +11,7 @@ setting: RE_ANDROID_CONTAINER_IMAGE | us-docker.pkg.dev/android-emulator-268719/
 setting: APKEDITOR_JAR | apkeditor on PATH, else a downloaded jar | APKEditor jar that merges split APKs | xapk-merger apk-pull re-doctor
 setting: JADX | jadx | Command that runs jadx; may carry arguments, e.g. 'flatpak run com.github.skylot.jadx' | apk-decompile re-doctor
 setting: JADX_GUI | jadx-gui | Command that runs jadx-gui, suggested to browse the output | apk-decompile
+setting: RE_FRIDA_SOURCE | florida-zygisk | Which frida-server to push: florida-zygisk (the Florida anti-detection build) or frida (stock) | frida-server re-doctor
+setting: RE_FRIDA_NAME | a random, persisted name | Name frida-server is pushed and run under on the device, to hide it; set to pin one | frida-server release-device re-doctor
 setting: RE_FRIDA_UNPIN_SCRIPTS | the five HTTP Toolkit scripts listed in the README | Unpinning scripts --ssl-unpinning loads, in order | frida-server
 setting: RE_FRIDA_UNPIN_REF | main | Git ref of HTTP Toolkit's unpinning scripts to download | frida-server

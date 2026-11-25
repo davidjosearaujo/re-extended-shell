@@ -2,6 +2,10 @@
 # launch-emulator, release-device and frida-server against the fakes.
 . "$(dirname -- "${BASH_SOURCE[0]}")/harness.sh"
 
+# Stock Frida and a fixed on-device name, so these assert on known paths; the
+# Florida source and the random name have their own tests (t_frida.sh).
+export RE_FRIDA_SOURCE=frida RE_FRIDA_NAME=frida-server
+
 if ! fake_cert; then
     skip "launch-emulator and friends" "openssl not installed"
     done_testing; exit 0

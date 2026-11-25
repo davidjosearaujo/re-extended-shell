@@ -20,6 +20,13 @@
 # export JADX="flatpak run com.github.skylot.jadx"
 # export JADX_GUI="flatpak run --command=jadx-gui com.github.skylot.jadx"
 # export JADX="$HOME/tools/jadx/bin/jadx"; export JADX_GUI="$HOME/tools/jadx/bin/jadx-gui"
+# frida-server: which build to push, and the on-device name it hides behind.
+# 'florida-zygisk' (default) is the Florida anti-detection build (tracking the
+# latest Frida); 'frida' is the stock build.
+# The name is random and persisted; set RE_FRIDA_NAME only to pin a fixed one.
+# export RE_FRIDA_SOURCE=florida-zygisk
+# export RE_FRIDA_NAME=mediaserverd
+
 # frida-server --ssl-unpinning: which HTTP Toolkit scripts to load
 # export RE_FRIDA_UNPIN_REF=main
 # export RE_FRIDA_UNPIN_SCRIPTS="native-tls-hook.js android/android-proxy-override.js android/android-system-certificate-injection.js android/android-certificate-unpinning.js android/android-certificate-unpinning-fallback.js android/android-disable-root-detection.js"

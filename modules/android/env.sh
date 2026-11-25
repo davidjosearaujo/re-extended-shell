@@ -25,3 +25,18 @@ if [ -n "${ANDROID_HOME:-}" ]; then
         unset _re_ndk
     fi
 fi
+
+# frida-server is pushed and run on the device under a random, persisted name
+# (see modules/android/lib.sh) rather than the give-away "frida-server", so
+# on-device anti-Frida checks can't spot it by name. Export that name so every
+# re-* command and you agree on it, and you can read it. A name you set
+# yourself is left untouched and pins it; otherwise we expose the persisted one
+# and mark it auto, so 'frida-server --refresh' can still rotate it mid-session.
+if [ -z "${RE_FRIDA_NAME:-}" ]; then
+    _re_fname_file="${RE_DATA_DIR:-$HOME/.local/share/re-extended-shell}/frida/server-name"
+    if [ -s "$_re_fname_file" ]; then
+        RE_FRIDA_NAME=$(cat "$_re_fname_file")
+        export RE_FRIDA_NAME _RE_FRIDA_NAME_AUTO=1
+    fi
+    unset _re_fname_file
+fi

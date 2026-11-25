@@ -28,6 +28,19 @@ the commits since it and `-dirty` when you've edited something.
 
 ### Changed
 
+- `frida-server` now pushes the [Florida](https://github.com/Ylarod/Florida) anti-detection
+  `frida-server` by default, which hides from the pinning and anti-Frida checks apps run.
+  It's taken from [thelok1s/florida-zygisk](https://github.com/thelok1s/florida-zygisk),
+  whose CI rebuilds Florida weekly against the latest Frida (we push its plain server
+  binary, not the Magisk module); `RE_FRIDA_SOURCE=frida` goes back to the stock upstream
+  build. florida-zygisk only publishes a build for some Frida versions, so when yours isn't
+  among them `frida-server` says so and points at a matching `frida-tools` or
+  `RE_FRIDA_SOURCE=frida`.
+- `frida-server` is pushed and run on the device under a random, persisted name instead of
+  the give-away `frida-server`, so on-device scans of the process list and
+  `/data/local/tmp` don't spot it. The name is saved under the cache dir and exported as
+  `RE_FRIDA_NAME`, so `release-device`, `re-doctor` and the rest agree on it; set
+  `RE_FRIDA_NAME` yourself to pin one, and `frida-server --refresh` rotates it.
 - Every command that takes `-s SERIAL` to pick a device (all but `release-device`, which
   only works on a physical device, and `launch-emulator`, which takes the AVD as its
   argument) now also takes `-n AVD_NAME`, like `reset-emulator` and `xapk-installer`:

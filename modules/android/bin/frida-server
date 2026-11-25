@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the matching frida-server on a rooted device, optionally spawning an app with SSL unpinning.
+# Start the matching frida-server (the Florida anti-detection build by default) on a rooted device, optionally spawning an app with SSL unpinning.
 # shellcheck source=../lib.sh
 _re_self=$0   # follow symlinks to find the repo (no 'readlink -f' on older macOS)
 while [ -L "$_re_self" ]; do
@@ -23,6 +23,13 @@ Downloads the frida-server build matching this machine's 'frida --version' and
 the device's CPU, pushes it and starts it as root. Does nothing if that version
 is already running. Needs root (adb root, or su via Magisk/KernelSU).
 
+By default it fetches the Florida anti-detection build, which hides from the
+checks apps run, from thelok1s/florida-zygisk (rebuilt weekly against the latest
+Frida); RE_FRIDA_SOURCE=frida uses the stock upstream build instead. To stay
+hidden it's pushed and run under a random, persisted name (RE_FRIDA_NAME,
+exported for the other commands) rather than "frida-server"; --refresh rotates
+that name.
+
 Options:
   -s, --serial SERIAL      Device to use (optional with a single device)
   -n, --name AVD_NAME      Running emulator to use, by AVD name. Either flag takes
@@ -36,7 +43,8 @@ Options:
                            (repeatable, needs --ssl-unpinning)
   --push-only              Only put the binary on the device, don't start it
                            (launch-emulator does this)
-  --refresh                Download frida-server and the unpinning scripts again
+  --refresh                Download frida-server and the unpinning scripts
+                           again, and rotate the random on-device name
   --stop                   Kill frida-server on the device
   -h, --help               Show this help
 EOF
@@ -72,9 +80,24 @@ ROOT=$(re_require_root "$SERIAL") || exit 1
 # 'adb root' restarts adbd, and the device shows up as offline until it is back
 adb -s "$SERIAL" wait-for-device
 
-DEVICE_BIN="$RE_DEVICE_DIR/frida-server"
+# --refresh rotates the random on-device name (unless you've pinned one, or are
+# only stopping). The server is about to be renamed out from under us, so stop
+# and delete the old one first, while we still know its name.
+if [ -n "$REFRESH" ] && [ -z "$STOP" ] && { [ -z "${RE_FRIDA_NAME:-}" ] || [ -n "${_RE_FRIDA_NAME_AUTO:-}" ]; }; then
+    OLD_NAME=$(re_frida_name)
+    OLD_PIDS=$(re_root_shell "$SERIAL" "$ROOT" "pidof $OLD_NAME" 2>/dev/null | tr -d '\r')
+    if [ -n "$OLD_PIDS" ]; then
+        echo "Rotating the on-device name; stopping the current server ($OLD_NAME)..."
+        re_root_shell "$SERIAL" "$ROOT" "kill $OLD_PIDS" >/dev/null 2>&1
+    fi
+    adb -s "$SERIAL" shell "rm -f '$RE_DEVICE_DIR/$OLD_NAME' '$RE_DEVICE_DIR/$OLD_NAME.version'" >/dev/null 2>&1
+    re_frida_name_reset >/dev/null || re_die "could not write $RE_FRIDA_NAME_FILE."
+fi
+
+DEV_NAME=$(re_frida_name) || re_die "could not read or create $RE_FRIDA_NAME_FILE."
+DEVICE_BIN="$RE_DEVICE_DIR/$DEV_NAME"
 running_pids() {
-    re_root_shell "$SERIAL" "$ROOT" "pidof frida-server" 2>/dev/null | tr -d '\r'
+    re_root_shell "$SERIAL" "$ROOT" "pidof $DEV_NAME" 2>/dev/null | tr -d '\r'
 }
 kill_server() {
     local PIDS
@@ -111,44 +134,61 @@ case "$ABI" in
     *) re_die "unsupported device ABI '$ABI'." ;;
 esac
 
-# Download (once per version and architecture) to the cache
-NAME="frida-server-$VERSION-android-$ARCH"
-LOCAL_BIN="$FRIDA_DIR/$NAME"
+# Which build to fetch. florida-zygisk is the Florida anti-detection build (the
+# same frida patches), rebuilt weekly so it tracks current Frida versions;
+# 'frida' is the stock upstream build. BUILD is the cache name, which carries
+# the source and version even when the asset's own name doesn't. The Florida
+# archive is gzip'd, Frida's xz'd.
+case "$RE_FRIDA_SOURCE" in
+    florida-zygisk) BUILD="florida-zygisk-server-$VERSION-android-$ARCH"
+             BUILD_URL="https://github.com/thelok1s/florida-zygisk/releases/download/$VERSION/frida-server-android-$ARCH.gz"
+             BUILD_EXT=gz
+             SRC_RELEASES="https://github.com/thelok1s/florida-zygisk/releases" ;;
+    frida)   BUILD="frida-server-$VERSION-android-$ARCH"
+             BUILD_URL="https://github.com/frida/frida/releases/download/$VERSION/$BUILD.xz"
+             BUILD_EXT=xz
+             SRC_RELEASES="" ;;
+    *) re_die "RE_FRIDA_SOURCE must be 'florida-zygisk' or 'frida', not '$RE_FRIDA_SOURCE'." ;;
+esac
+
+# Download (once per version, architecture and source) to the cache
+LOCAL_BIN="$FRIDA_DIR/$BUILD"
 if [ ! -f "$LOCAL_BIN" ] || [ -n "$REFRESH" ]; then
-    echo "Downloading $NAME..."
-    trap 'rm -f "$LOCAL_BIN.xz" "$LOCAL_BIN.part"' EXIT
-    re_download "https://github.com/frida/frida/releases/download/$VERSION/$NAME.xz" "$LOCAL_BIN.xz" --progress-bar \
-        || re_die "download failed (is there a $VERSION release for android-$ARCH?)."
-    # xz isn't installed on stock macOS, but Python (which Frida needs) can do it
-    if command -v xz >/dev/null 2>&1; then
-        xz -dc "$LOCAL_BIN.xz" >"$LOCAL_BIN.part" || re_die "could not decompress $NAME.xz."
-    elif command -v python3 >/dev/null 2>&1; then
-        python3 -c 'import lzma, shutil, sys
-with lzma.open(sys.argv[1]) as src, open(sys.argv[2], "wb") as dst:
-    shutil.copyfileobj(src, dst)' "$LOCAL_BIN.xz" "$LOCAL_BIN.part" || re_die "could not decompress $NAME.xz."
-    else
-        re_die "'xz' or 'python3' is required to decompress $NAME.xz."
+    echo "Downloading $BUILD..."
+    trap 'rm -f "$LOCAL_BIN.$BUILD_EXT" "$LOCAL_BIN.part"' EXIT
+    if ! re_download "$BUILD_URL" "$LOCAL_BIN.$BUILD_EXT" --progress-bar; then
+        [ -z "$SRC_RELEASES" ] || re_die "$RE_FRIDA_SOURCE has no server build for Frida $VERSION (android-$ARCH).
+It only tracks some Frida versions: $SRC_RELEASES
+Install a frida-tools whose version it has (pipx install 'frida-tools==<version>'),
+or set RE_FRIDA_SOURCE=frida to push the stock frida-server instead."
+        re_die "download failed (is there a $VERSION release for android-$ARCH?)."
     fi
+    # 'xz' isn't on stock macOS, but Python (which Frida needs) can unpack both
+    re_decompress "$LOCAL_BIN.$BUILD_EXT" "$LOCAL_BIN.part" "$BUILD_EXT" \
+        || re_die "could not decompress $BUILD.$BUILD_EXT ('xz'/'gzip' or python3 needed)."
     mv -f "$LOCAL_BIN.part" "$LOCAL_BIN"
-    rm -f "$LOCAL_BIN.xz"
+    rm -f "$LOCAL_BIN.$BUILD_EXT"
     trap - EXIT
 fi
 
-# Push the binary, unless this very version is already on the device
-DEVICE_VERSION=$(adb -s "$SERIAL" shell "[ -x '$DEVICE_BIN' ] && cat '$DEVICE_BIN.version'" 2>/dev/null | tr -d '\r')
+# Push the binary, unless this very build (version and source) is already there.
+# The marker is "<version> <source>", version first so re-doctor can read the
+# version off the front without knowing the format.
+DEVICE_MARKER=$(adb -s "$SERIAL" shell "[ -x '$DEVICE_BIN' ] && cat '$DEVICE_BIN.version'" 2>/dev/null | tr -d '\r')
+DEVICE_VERSION=${DEVICE_MARKER%% *}
 ON_DEVICE=""
-if [ "$DEVICE_VERSION" = "$VERSION" ] && [ -z "$REFRESH" ]; then ON_DEVICE=1; fi
-# Anything running is stale unless this very version stays; the local test goes
+if [ "$DEVICE_MARKER" = "$VERSION $RE_FRIDA_SOURCE" ] && [ -z "$REFRESH" ]; then ON_DEVICE=1; fi
+# Anything running is stale unless this very build stays; the local test goes
 # first so the common case saves a round trip to the device
 if [ -z "$ON_DEVICE" ] && [ -n "$(running_pids)" ]; then
     echo "Stopping the frida-server already running on $SERIAL (${DEVICE_VERSION:-unknown version})..."
     kill_server
 fi
 if [ -z "$ON_DEVICE" ]; then
-    echo "Pushing frida-server $VERSION ($ARCH) to $SERIAL:$DEVICE_BIN..."
+    echo "Pushing frida-server $VERSION ($ARCH, $RE_FRIDA_SOURCE) to $SERIAL:$DEVICE_BIN..."
     adb -s "$SERIAL" shell mkdir -p "$RE_DEVICE_DIR" || exit 1
     adb -s "$SERIAL" push "$LOCAL_BIN" "$DEVICE_BIN" >/dev/null || re_die "push failed."
-    adb -s "$SERIAL" shell "chmod 755 '$DEVICE_BIN' && echo $VERSION > '$DEVICE_BIN.version'" || exit 1
+    adb -s "$SERIAL" shell "chmod 755 '$DEVICE_BIN' && echo '$VERSION $RE_FRIDA_SOURCE' > '$DEVICE_BIN.version'" || exit 1
 elif [ -n "$PUSH_ONLY" ]; then
     echo "frida-server $VERSION is already on $SERIAL:$DEVICE_BIN."
 fi
